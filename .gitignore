@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+ablation_outputs/
+checkpoints/
+*.pt
+*.pth
+*.vti
+*.vtp
+*.vtk
+*.png
+*.pdf
