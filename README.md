@@ -14,12 +14,22 @@ The repository is intentionally small. It includes the ablation case entry
 point, the model and loss modules it imports, and the two CSV files required by
 the controlled two-fault example. Engineering-area data are not included.
 
+## Reported experimental environment
+
+The experiments reported in the manuscript were performed on Windows 11 using
+an Intel Core i7-13790F processor and an NVIDIA GeForce RTX 5060 Ti GPU. The
+software environment was Python 3.12, PyTorch 2.6.0, and CUDA 12.8.
+
+The paper-parameter runner is configured to use CUDA for strict reproduction
+of the reported experiments. CPU execution and other CUDA devices remain
+possible for portability, but their runtime and numerical results may differ.
+
 ## Requirements
 
-- Windows 11 or Linux
+- Windows 11
 - Python 3.12
 - PyTorch 2.6.0
-- CUDA 12.8 is optional; CPU execution is supported but slower
+- CUDA 12.8
 - NumPy, pandas, Matplotlib, PyVista, and VTK
 
 Install the pinned paper environment with:
@@ -36,17 +46,19 @@ GPU first, then install the remaining packages from the requirements file.
 Run one seed and one configuration to verify the installation:
 
 ```bash
-python ablation/case_paper_parameters.py --device auto --seeds 0 --variants effective_domain
+python ablation/case_paper_parameters.py --device cuda --seeds 0 --variants effective_domain
 ```
 
 This command writes the outputs to `ablation_outputs/paper_case`.
 
 ## Full ablation case
 
-The paper-parameter run uses four configurations and five random seeds:
+The paper-parameter run uses four configurations and five random seeds. Use
+`--device auto` only when intentionally running on a different machine and
+accepting a CPU fallback:
 
 ```bash
-python ablation/case_paper_parameters.py --device auto --rebuild-faults
+python ablation/case_paper_parameters.py --device cuda --rebuild-faults
 ```
 
 The four configurations are:

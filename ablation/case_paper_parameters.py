@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import platform
 import sys
 import time
 from dataclasses import asdict, replace
@@ -216,6 +217,9 @@ def run(args: argparse.Namespace) -> Path:
     metadata = {
         "config": asdict(config),
         "device": str(device),
+        "requested_device": args.device,
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
         "paper_config": True,
         "fault_above_below_constraint": True,
         "eikonal_weight": 0.01,
@@ -225,6 +229,13 @@ def run(args: argparse.Namespace) -> Path:
         "terminal_holdout": holdout_metadata,
         "cross_fault_epsilon_physical_units": float(pairs["epsilon"][0]),
         "torch_version": str(torch.__version__),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_runtime": torch.version.cuda,
+        "gpu_name": (
+            torch.cuda.get_device_name(device)
+            if device.type == "cuda" and torch.cuda.is_available()
+            else None
+        ),
         "numpy_version": np.__version__,
         "pyvista_version": pv.__version__,
     }
