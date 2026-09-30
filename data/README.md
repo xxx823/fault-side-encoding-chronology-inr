@@ -5,6 +5,6 @@ the controlled two-fault ablation runner. The surface file contains interface
 and fault points; the orientation file contains spatial coordinates and
 direction vectors.
 
-Confirm redistribution rights before publishing these files. If the original
-engineering data are restricted, replace them with a redistributable synthetic
-example while preserving the documented column schema.
+The files in `data/case1/` are the redistributable inputs for the controlled
+two-fault ablation experiment described in the manuscript. They do not contain
+data from the confidential engineering case.

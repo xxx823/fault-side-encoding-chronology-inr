@@ -1,5 +1,11 @@
 # Fault-Side Encoding and Chronology-Constrained INR
 
+## Associated manuscript
+
+**Title:** Implicit Neural Representation for 3D Geological Modeling Using Fault Side Encoding and Chronology Constraints
+
+**Authors:** Yingxian Chen, Jianzheng Xin, Pu Wang
+
 This repository contains the reproducible implementation of the controlled
 truncation ablation case associated with the manuscript on implicit neural
 representation for 3D geological modelling.
@@ -40,6 +46,15 @@ python -m pip install -r requirements-paper.txt
 
 For a CUDA installation, install the PyTorch wheel appropriate for the local
 GPU first, then install the remaining packages from the requirements file.
+
+## Input data
+
+The controlled two-fault ablation example uses two input files in `data/case1/`:
+
+- `surface.csv`: stratigraphic interface points and fault-surface points with spatial coordinates and geological labels.
+- `orientation.csv`: stratigraphic and fault orientation samples with spatial coordinates and direction vectors.
+
+These files contain only the controlled experimental data used for the ablation example and do not include data from the confidential engineering case.
 
 ## Quick smoke test
 
@@ -88,6 +103,23 @@ Each seed/configuration directory contains:
 The output root also contains `metrics_summary.csv`, `metrics_all_runs.csv`,
 `run_config.json`, and the ablation summary plot.
 
+## Expected behaviour
+
+The four ablation configurations are expected to show distinct structural responses.
+
+Global fault-side encoding should produce a clear scalar difference across the fault within its valid region. After the chronology-constrained valid-domain mask is introduced, the residual scalar response beyond the fault termination should be strongly suppressed, while the interface reconstruction near the termination should improve.
+
+For the full five-seed experiment, the results should reproduce the same trends as those reported in the manuscript.
+
+The reference results reported in the manuscript are:
+
+| Configuration | Valid-region scalar difference | Invalid-region residual | Interface RMSE (m) |
+| --- | ---: | ---: | ---: |
+| Spatial coordinates only | 0.00542 ± 0.00010 | 0.00195 ± 0.00010 | 25.57 ± 1.00 |
+| Zero-vector placeholder | 0.00553 ± 0.00012 | 0.00196 ± 0.00016 | 26.01 ± 1.35 |
+| Global fault-side encoding | 0.44571 ± 0.01194 | 0.35995 ± 0.00218 | 29.31 ± 0.35 |
+| Fault-side encoding + valid-domain constraint | 0.29998 ± 0.01216 | 0.00118 ± 0.00005 | 24.43 ± 0.86 |
+
 ## Reproducibility notes
 
 The manuscript does not specify a separate Eikonal sample count `N_E`. The
@@ -96,13 +128,11 @@ interface and orientation query points and records this choice in
 `run_config.json`. The fault above/below option is enabled in the runner; the
 included data currently produce a zero numerical above/below term.
 
-The included CSV files are provided only for the controlled ablation example.
-Before public release, confirm that their redistribution is permitted. If the
-engineering data are restricted, replace them with a synthetic or otherwise
-redistributable example and update this section.
+The included CSV files are the redistributable input data used for the
+controlled two-fault ablation experiment described in the manuscript. They do
+not contain data from the confidential engineering case.
 
 ## Citation and contact
 
-Please cite the associated manuscript when using this code. Add the final
-paper citation, repository URL, and author contact before creating the public
-release.
+Please cite the associated manuscript when using this code. Include the
+repository URL and author contact in the final citation information.
