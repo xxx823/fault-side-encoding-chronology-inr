@@ -85,10 +85,9 @@ The four configurations are:
 
 The reported protocol uses 2 hidden layers with 256 units, Adam with a
 learning rate of 0.001, fault Softplus beta 10, stratigraphic Softplus beta 1,
-500 fault epochs, 1000 stratigraphic epochs, attitude weight 0.1, and Eikonal
-weight 0.01. The evaluation uses 5 m cross-fault offsets, a 10 m boundary
-exclusion, a fixed 80--320 m terminal-region window, and 15 fixed holdout
-interface points.
+500 fault epochs, and 1000 stratigraphic epochs. The evaluation uses 5 m
+cross-fault offsets, a 10 m boundary exclusion, a fixed 80--320 m
+terminal-region window, and 15 fixed holdout interface points.
 
 ## Outputs
 
@@ -122,10 +121,7 @@ The reference results reported in the manuscript are:
 
 ## Reproducibility notes
 
-The manuscript does not specify a separate Eikonal sample count `N_E`. The
-paper-parameter runner therefore evaluates the Eikonal term on the existing
-interface and orientation query points and records this choice in
-`run_config.json`. The fault above/below option is enabled in the runner; the
+The fault above/below option is enabled in the paper-parameter runner; the
 included data currently produce a zero numerical above/below term.
 
 The included CSV files are the redistributable input data used for the

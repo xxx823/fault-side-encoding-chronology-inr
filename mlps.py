@@ -3,7 +3,11 @@ import torch.nn as nn
 
 class SimpleMLP(nn.Module):
     """
-    this is a simple MLP model, the network structure is [3, 256, 256, 256, 1] which is fixed
+    Simple 2 x 256 MLP used for scalar-field baselines.
+
+    The network structure is [3, 256, 256, 1], matching the two-hidden-layer
+    architecture reported in the manuscript.
+
     only beta parameter in the Softplus activation function can be changed
     """
     def __init__(self, beta):
@@ -16,8 +20,6 @@ class SimpleMLP(nn.Module):
             self.activation,         
             nn.Linear(256, 256), 
             self.activation,    
-            nn.Linear(256, 256), 
-            self.activation,   
             nn.Linear(256, 1)   
         )
 
@@ -28,15 +30,12 @@ class SimpleMLP(nn.Module):
 # used in implicit neural representation
 class ConcatMLP(nn.Module):
     """
-    concatenate the input features with the hidden layer features as an enhanced feature
-    the neural network structure is flexible, where
-    in_dim: the input dimension, the coodinates plus fault features
-    hidden_dim: the hidden layer dimension
-    out_dim: the output dimension, a scalar value
-    n_hidden_layers: the number of hidden layers
-    activation: the activation function
-    beta: the beta parameter in the Softplus activation function, effective when the activation function is Softplus
-    concat: whether to concatenate the input features with the hidden layer features
+    MLP used by the implicit fields.
+
+    ``n_hidden_layers`` is the total number of hidden layers. Therefore,
+    ``n_hidden_layers=2`` and ``hidden_dim=256`` implement the manuscript's
+    2 x 256 architecture. With ``concat=True``, the original input is joined
+    to each hidden representation before the next layer.
     """
     def __init__(self,
                  in_dim,
@@ -47,6 +46,8 @@ class ConcatMLP(nn.Module):
                  beta, 
                  concat):
         super(ConcatMLP, self).__init__()
+        if n_hidden_layers < 1:
+            raise ValueError("n_hidden_layers must be at least 1")
         self.layers = nn.ModuleList()
         self.beta = beta
         if activation == 'Softplus':
@@ -65,42 +66,33 @@ class ConcatMLP(nn.Module):
             self.activation = nn.PReLU()
         else:
             print('Activation function not recognized. Using Softplus, ReLU, LeakyReLU, Tanh, Sigmoid, ELU.')
-        self.num_layers = 2 + n_hidden_layers
         self.concat = concat
 
-        # input layer
+        # The first layer is the first hidden layer, not an extra projection.
         self.layers.append(nn.Linear(in_dim, hidden_dim))
 
         if self.concat:
-            # hidden layers
-            h_dim_concat = in_dim + hidden_dim
-            for i in range(n_hidden_layers):
-                self.layers.append(nn.Linear(h_dim_concat, h_dim_concat))
-                #h_dim_concat *= 2  # concatenate all the former layer's features 
-                h_dim_concat = in_dim + h_dim_concat # only concatenate the input with the hidden layer features
-            # output layer
-            self.layers.append(nn.Linear(h_dim_concat, out_dim))
+            hidden_input_dim = in_dim + hidden_dim
+            for _ in range(n_hidden_layers - 1):
+                self.layers.append(nn.Linear(hidden_input_dim, hidden_dim))
+            self.output = nn.Linear(hidden_input_dim, out_dim)
 
         else:
-            # hidden layers
-            for i in range(n_hidden_layers):
+            for _ in range(n_hidden_layers - 1):
                 self.layers.append(nn.Linear(hidden_dim, hidden_dim))
-            # output layer
-            self.layers.append(nn.Linear(hidden_dim, out_dim))
+            self.output = nn.Linear(hidden_dim, out_dim)
     
     def forward(self, x):
-        x_target = x  # Keep the original input features for concatenation
+        x_target = x
+        hidden = self.activation(self.layers[0](x))
 
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            
-            # Only apply activation and concatenation to hidden layers (not the last layer)
-            if i < len(self.layers) - 1:
-                if self.concat:
-                    # Concatenate the input with the hidden layer output
-                    x = torch.cat((x_target, x), dim=1)
-                x = self.activation(x)
-        
-        return x
-    
+        if self.concat:
+            hidden = torch.cat((x_target, hidden), dim=1)
+            for layer in self.layers[1:]:
+                hidden = self.activation(layer(hidden))
+                hidden = torch.cat((x_target, hidden), dim=1)
+            return self.output(hidden)
 
+        for layer in self.layers[1:]:
+            hidden = self.activation(layer(hidden))
+        return self.output(hidden)

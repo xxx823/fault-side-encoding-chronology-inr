@@ -9,6 +9,18 @@ def loss_intf_sum(y_pred, y_true):
     return criterion(y_pred, y_true)
 
 
+def loss_intf_mean(y_pred, y_true):
+    """Return the mean squared interface-position error.
+
+    The manuscript defines the interface loss as an average over the
+    interface samples.  Keeping this as a separate helper preserves the
+    legacy ``loss_intf_sum`` API while making the paper runner explicit.
+    """
+
+    criterion = nn.MSELoss(reduction='mean')
+    return criterion(y_pred, y_true)
+
+
 # for fault/unconformity
 def loss_intf(y_pred, y_true):
     #criterion = nn.MSELoss()
@@ -68,8 +80,9 @@ def loss_grad_with_fault_features(train_x, y_pred, y_true, n_orien):
     gradients = autograd.grad(outputs=y_pred, inputs=train_x, grad_outputs=torch.ones_like(y_pred), create_graph=True)[0]
     grad_norm_pred = torch.norm(gradients[-n_orien:,:3], p=2, dim=1)
     grad_inner_product = torch.einsum('ij, ij->i', y_true, gradients[-n_orien:,:3])
-    cosine = grad_inner_product / grad_norm_pred  # orie_tensor using normal orientation
-    loss_grad = torch.sum(1 - cosine)
+    cosine = grad_inner_product / (grad_norm_pred + 1e-12)
+    # Eq. (8) uses the mean directional discrepancy over orientation samples.
+    loss_grad = torch.mean(1 - cosine)
 
     return loss_grad
 
@@ -94,5 +107,4 @@ def loss_below(y_pred, n_inter, n_above, n_below, device):
     loss_below = torch.maximum(y_pred[3*n_inter+n_above : 3*n_inter+n_above+n_below], torch.tensor(0, device=device)).sum()
 
     return loss_below
-
 

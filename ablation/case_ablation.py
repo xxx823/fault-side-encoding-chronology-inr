@@ -64,6 +64,9 @@ class ExperimentConfig:
     fault_beta: Tuple[float, ...] = (10.0, 10.0)
     fault_epochs: int = 1000
     fault_lr: float = 0.001
+    fault_eikonal_weight: float = 0.0
+    fault_eikonal_samples: int = 0
+    fault_above_below: bool = False
     strat_hidden_dim: int = 512
     strat_hidden_layers: int = 4
     strat_beta: float = 210.0
@@ -198,6 +201,9 @@ def train_or_load_faults(
         "fault_beta": config.fault_beta,
         "fault_epochs": config.fault_epochs,
         "fault_lr": config.fault_lr,
+        "fault_eikonal_weight": config.fault_eikonal_weight,
+        "fault_eikonal_samples": config.fault_eikonal_samples,
+        "fault_above_below": config.fault_above_below,
     }
     cached_config = None
     if metadata_path.exists():
@@ -227,7 +233,9 @@ def train_or_load_faults(
         concat=True,
         epochs=config.fault_epochs,
         lr=config.fault_lr,
-        above_below=False,
+        above_below=config.fault_above_below,
+        eikonal_weight=config.fault_eikonal_weight,
+        eikonal_samples=config.fault_eikonal_samples,
         device=device,
     )
     if len(meshes) != len(config.fault_names):
@@ -468,7 +476,7 @@ def train_stratigraphic_model(
         optimizer.zero_grad(set_to_none=True)
         x_tensor.grad = None
         prediction = model(x_tensor)
-        interface_loss = lossf.loss_intf_sum(
+        interface_loss = lossf.loss_intf_mean(
             prediction[:n_interface].squeeze(), y_tensor
         )
         orientation_loss = lossf.loss_grad_with_fault_features(

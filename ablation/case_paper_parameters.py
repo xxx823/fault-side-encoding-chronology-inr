@@ -2,12 +2,9 @@
 
 This wrapper keeps the original ablation data preparation and evaluation protocol,
 but replaces the training configuration with the values reported in Table 1 of
-the manuscript.  It also enables the fault above/below constraint and adds an
-Eikonal term to the stratigraphic-field loss.
-
-The Eikonal term is evaluated on the existing interface/orientation query
-points because the manuscript does not specify a separate N_E sampling rule.
-The run metadata records this limitation explicitly.
+the manuscript. It also enables the fault above/below constraint and evaluates
+the stratigraphic Eikonal term on uniformly sampled points inside the modeling
+domain.
 """
 
 from __future__ import annotations
@@ -20,7 +17,7 @@ import sys
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List
 
 import numpy as np
 import pyvista as pv
@@ -32,6 +29,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import ablation.case_ablation as exp  # noqa: E402
+
+
+PAPER_EIKONAL_WEIGHT = 0.01
+PAPER_N_E = 4096
 
 
 def paper_config() -> exp.ExperimentConfig:
@@ -53,6 +54,9 @@ def paper_config() -> exp.ExperimentConfig:
         # Table 1: epochs and learning rate.
         fault_epochs=500,
         fault_lr=0.001,
+        fault_eikonal_weight=PAPER_EIKONAL_WEIGHT,
+        fault_eikonal_samples=PAPER_N_E,
+        fault_above_below=True,
         strat_epochs=1000,
         strat_lr=0.001,
         # Manuscript loss weights: interface=1, attitude=0.1, Eikonal=0.01.
@@ -87,10 +91,11 @@ def train_stratigraphic_model_paper(
     config: exp.ExperimentConfig,
     interface: np.ndarray,
     orientation: np.ndarray,
+    eikonal_domain: np.ndarray,
     seed: int,
     device: torch.device,
 ):
-    """Train the stratigraphic network with Adam and the paper loss weights."""
+    """Train the stratigraphic network with the manuscript loss definition."""
 
     train_x = interface[:, 1:].astype(np.float64)
     train_y = interface[:, 0].astype(np.float64)
@@ -99,9 +104,16 @@ def train_stratigraphic_model_paper(
 
     normalized_interface = exp.normalize_inputs(train_x, config.extent)
     normalized_orientation = exp.normalize_inputs(orientation_x, config.extent)
+    normalized_eikonal = exp.normalize_inputs(eikonal_domain, config.extent)
     combined = np.vstack((normalized_interface, normalized_orientation))
 
     x_tensor = torch.tensor(combined, dtype=torch.float32, device=device, requires_grad=True)
+    eikonal_tensor = torch.tensor(
+        normalized_eikonal,
+        dtype=torch.float32,
+        device=device,
+        requires_grad=True,
+    )
     y_tensor = torch.tensor(train_y, dtype=torch.float32, device=device)
     dy_tensor = torch.tensor(orientation_y, dtype=torch.float32, device=device)
     n_interface = normalized_interface.shape[0]
@@ -132,13 +144,19 @@ def train_stratigraphic_model_paper(
     for epoch in range(config.strat_epochs):
         optimizer.zero_grad(set_to_none=True)
         x_tensor.grad = None
+        eikonal_tensor.grad = None
         prediction = model(x_tensor)
-        interface_term = exp.lossf.loss_intf_sum(prediction[:n_interface].squeeze(), y_tensor)
-        eikonal_term = eikonal_loss(model, x_tensor, prediction)
+        interface_term = exp.lossf.loss_intf_mean(prediction[:n_interface].squeeze(), y_tensor)
+        eikonal_prediction = model(eikonal_tensor)
+        eikonal_term = eikonal_loss(model, eikonal_tensor, eikonal_prediction)
         orientation_term = exp.lossf.loss_grad_with_fault_features(
             x_tensor, prediction, dy_tensor, n_orientation
         )
-        loss = interface_term + config.orientation_weight * orientation_term + 0.01 * eikonal_term
+        loss = (
+            interface_term
+            + config.orientation_weight * orientation_term
+            + PAPER_EIKONAL_WEIGHT * eikonal_term
+        )
         if not torch.isfinite(loss):
             raise FloatingPointError(f"Non-finite loss at seed={seed}, epoch={epoch + 1}")
 
@@ -179,14 +197,6 @@ def run(args: argparse.Namespace) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     device = exp.resolve_device(args.device)
 
-    # The manuscript states that the fault-stage spatial relation constraint is enabled.
-    original_fault_builder = exp.models.fault_ConcatMLP
-
-    def paper_fault_builder(*builder_args, **builder_kwargs):
-        builder_kwargs["above_below"] = True
-        return original_fault_builder(*builder_args, **builder_kwargs)
-
-    exp.models.fault_ConcatMLP = paper_fault_builder
     surface, orientation = exp.load_case(config)
     meshes = exp.train_or_load_faults(
         config,
@@ -221,9 +231,10 @@ def run(args: argparse.Namespace) -> Path:
         "platform": platform.platform(),
         "python_version": platform.python_version(),
         "paper_config": True,
-        "fault_above_below_constraint": True,
-        "eikonal_weight": 0.01,
-        "eikonal_sampling": "existing interface and orientation query points; separate N_E is not specified in the manuscript",
+        "fault_above_below_constraint": config.fault_above_below,
+        "eikonal_weight": PAPER_EIKONAL_WEIGHT,
+        "N_E": PAPER_N_E,
+        "eikonal_sampling": "uniform random points in the modeling domain; one fixed point set per seed reused across variants",
         "retained_younger_side": retained_side,
         "retained_side_inference": side_metadata,
         "terminal_holdout": holdout_metadata,
@@ -244,6 +255,23 @@ def run(args: argparse.Namespace) -> Path:
 
     all_rows = []
     for seed in config.seeds:
+        eikonal_points_path = output_dir / f"eikonal_points_seed_{seed}.npy"
+        if eikonal_points_path.exists() and np.load(eikonal_points_path, mmap_mode="r").shape == (
+            PAPER_N_E,
+            3,
+        ):
+            eikonal_coordinates = np.load(eikonal_points_path)
+        else:
+            # Use one fixed physical point set for all four variants of this seed.
+            extent = np.asarray(config.extent, dtype=float)
+            rng = np.random.default_rng(seed)
+            eikonal_coordinates = rng.uniform(
+                extent[[0, 2, 4]],
+                extent[[1, 3, 5]],
+                size=(PAPER_N_E, 3),
+            )
+            np.save(eikonal_points_path, eikonal_coordinates)
+        eikonal_raw = exp.raw_domain_for_points(config, meshes, eikonal_coordinates)
         for variant in config.variants:
             print(f"\n=== seed={seed} variant={variant} ===", flush=True)
             run_dir = output_dir / f"seed_{seed}" / variant
@@ -260,8 +288,20 @@ def run(args: argparse.Namespace) -> Path:
             holdout_x, _ = exp.transform_domain(holdout_domain, variant, config.fault_names, rules)
             holdout_interface = np.column_stack((holdout_interface_raw[:, 0], holdout_x))
 
+            eikonal_domain, eikonal_metadata = exp.transform_domain(
+                eikonal_raw,
+                variant,
+                config.fault_names,
+                rules,
+            )
+
             model, history, best = train_stratigraphic_model_paper(
-                config, interface, orientation_variant, seed, device
+                config,
+                interface,
+                orientation_variant,
+                eikonal_domain,
+                seed,
+                device,
             )
             exp.write_history(run_dir / "loss_history.csv", history)
             if args.save_checkpoints:
@@ -294,7 +334,16 @@ def run(args: argparse.Namespace) -> Path:
             }
             all_rows.append(row)
             (run_dir / "metrics.json").write_text(
-                json.dumps({"metrics": row, "terminal_rmse_by_label": terminal_by_label, "feature_metadata": feature_metadata}, ensure_ascii=False, indent=2),
+                json.dumps({
+                    "metrics": row,
+                    "terminal_rmse_by_label": terminal_by_label,
+                    "feature_metadata": feature_metadata,
+                    "eikonal": {
+                        "N_E": PAPER_N_E,
+                        "sampling": "uniform random points in the modeling domain",
+                        "feature_metadata": eikonal_metadata,
+                    },
+                }, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             print(json.dumps(row, ensure_ascii=False, indent=2), flush=True)

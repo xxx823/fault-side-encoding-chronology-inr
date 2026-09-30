@@ -13,6 +13,20 @@ def _safe_unit_np(v, eps=1e-12):
         return v
     return v / n
 
+
+def _fault_eikonal_loss(model, points):
+    """Return the unit-gradient penalty for normalized fault coordinates."""
+
+    prediction = model(points)
+    gradient = torch.autograd.grad(
+        outputs=prediction,
+        inputs=points,
+        grad_outputs=torch.ones_like(prediction),
+        create_graph=True,
+        retain_graph=True,
+    )[0][:, :3]
+    return ((torch.linalg.vector_norm(gradient, dim=1) - 1.0) ** 2).mean()
+
 def extend_surface_along_normal(points_normed_xyz: np.ndarray, normal_unit_xyz: np.ndarray, delta: float):
     """
     Create three training layers along a supplied normal in normalized space.
@@ -383,7 +397,8 @@ def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolut
 
 
 def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
-                    n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001, above_below=False, 
+                    n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001,
+                    eikonal_weight=0.0, eikonal_samples=0, above_below=False,
                     device=torch.device("cpu"), logger=None):
     """
     Notes: 1. this function is used to model the fault surface, it is divided into two modes by whether using the above and below constraints, 
@@ -402,6 +417,8 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
     concat: whether to concatenate the input features with the hidden layer features
     epochs: the number of epochs for training the model
     lr: the learning rate for training the model
+    eikonal_weight: weight of the fault-stage Eikonal regularizer
+    eikonal_samples: number of fixed normalized-domain samples for that regularizer
     above_below: whether to use the above and below constraints, default is False
     """
     # read the data
@@ -490,9 +507,15 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                               n_hidden_layers=n_hidden_layers,
                               activation=activation,
                               beta=beta,
-                              concat=concat,
-                              ).to(device)
+                               concat=concat,
+                               ).to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            fault_eikonal_points = None
+            if eikonal_weight > 0.0 and eikonal_samples > 0:
+                # Reuse one fixed point set for this fault throughout training.
+                fault_eikonal_points = (
+                    2.0 * torch.rand((eikonal_samples, in_dim), device=device) - 1.0
+                ).requires_grad_(True)
             # Initialize variables to track minimum loss and corresponding parameters
             min_loss = float('inf')
             best_params = None
@@ -502,14 +525,20 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                 loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
                 loss_a = lossf.loss_above(y_pred, n_inter, n_above, device)
                 loss_b = lossf.loss_below(y_pred, n_inter, n_above, n_below, device)
-                loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b    
+                if fault_eikonal_points is None:
+                    loss_e = torch.zeros((), dtype=loss_i.dtype, device=device)
+                else:
+                    fault_eikonal_points.grad = None
+                    loss_e = _fault_eikonal_loss(model, fault_eikonal_points)
+                loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b + eikonal_weight*loss_e
                 #loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b         
                 # Check if current loss is lower than minimum loss
-                if loss_i < min_loss:
-                    min_loss = loss_i
+                if loss.item() < min_loss:
+                    min_loss = loss.item()
                     min_loss_i = loss_i
                     min_loss_o = loss_o
                     min_loss_ab = loss_a + loss_b
+                    min_loss_e = loss_e
                     # Save the current parameters of the model
                     best_params = copy.deepcopy(model.state_dict())
                 # Zero gradients, perform a backward pass, and update the weights.
@@ -533,7 +562,7 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                 predictions = best_model(test_x_tensor).cpu().numpy()
             # convert to pyvista mesh
             fault_mesh = utils.predict_to_mesh_fault(extent, resolution, predictions)
-            print(f'Finish modeling {fault_name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}, Loss_ab:{min_loss_ab.item()}')
+            print(f'Finish modeling {fault_name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}, Loss_ab:{min_loss_ab.item()}, Loss_e:{min_loss_e.item()}')
             mesh.append(fault_mesh)
             n += 1
         print('------Finish-------')
@@ -603,9 +632,15 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                               n_hidden_layers=n_hidden_layers,
                               activation=activation,
                               beta=beta,
-                              concat=concat,
-                              ).to(device)
+                               concat=concat,
+                               ).to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            fault_eikonal_points = None
+            if eikonal_weight > 0.0 and eikonal_samples > 0:
+                # Reuse one fixed point set for this fault throughout training.
+                fault_eikonal_points = (
+                    2.0 * torch.rand((eikonal_samples, in_dim), device=device) - 1.0
+                ).requires_grad_(True)
             # Initialize variables to track minimum loss and corresponding parameters
             min_loss = float('inf')
             best_params = None
@@ -613,7 +648,12 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                 y_pred = model(mlp_x_tensor)
                 loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
                 loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
-                loss = loss_i + 0.1*loss_o
+                if fault_eikonal_points is None:
+                    loss_e = torch.zeros((), dtype=loss_i.dtype, device=device)
+                else:
+                    fault_eikonal_points.grad = None
+                    loss_e = _fault_eikonal_loss(model, fault_eikonal_points)
+                loss = loss_i + 0.1*loss_o + eikonal_weight*loss_e
                 if logger is not None:
                     logger.log(
                         stage_name=f'fault_{fault_name}',
@@ -625,10 +665,11 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                         lr=optimizer.param_groups[0]['lr'],
                     )
                 # Check if current loss is lower than minimum loss
-                if loss_i < min_loss:
-                    min_loss = loss_i
+                if loss.item() < min_loss:
+                    min_loss = loss.item()
                     min_loss_i = loss_i
                     min_loss_o = loss_o
+                    min_loss_e = loss_e
                     # Save the current parameters of the model
                     best_params = copy.deepcopy(model.state_dict())
                 # Zero gradients, perform a backward pass, and update the weights.
@@ -652,7 +693,7 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                 predictions = best_model(test_x_tensor).cpu().numpy()
             # convert to pyvista mesh
             fault_mesh = utils.predict_to_mesh_fault(extent, resolution, predictions)
-            print(f'Finish modeling {fault_name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}')
+            print(f'Finish modeling {fault_name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}, Loss_e:{min_loss_e.item()}')
             mesh.append(fault_mesh)
             n += 1
         print('------Finish-------')
@@ -1055,7 +1096,7 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     for epoch in range(epochs):
         y_pred = model(x_dx_tensor)  
         # calculate the interface loss
-        loss_i = lossf.loss_intf_sum(y_pred[:n_intf,:].squeeze(), y_tensor)
+        loss_i = lossf.loss_intf_mean(y_pred[:n_intf,:].squeeze(), y_tensor)
         """ criterion = nn.MSELoss(reduction='sum')
         loss_i = criterion(y_pred[:n_intf,:].squeeze(), y_tensor) """
         # calculate the orientation gradient loss
