@@ -873,6 +873,7 @@ def stratigraphic_ConcatMLP_neighbor(
     interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim,
     hidden_dim, out_dim, n_hidden_layers, activation="Softplus", beta=1,
     concat=True, epochs=1000, lr=0.001, delta_orie=1, alpha=0.1,
+    eikonal_weight=0.01, eikonal_samples=None, eikonal_seed=0,
     device=torch.device("cpu"),
 ):
     """Compatibility wrapper for the manuscript-aligned stratigraphic trainer.
@@ -898,11 +899,14 @@ def stratigraphic_ConcatMLP_neighbor(
         epochs=epochs,
         lr=lr,
         alpha=alpha,
+        eikonal_weight=eikonal_weight,
+        eikonal_samples=eikonal_samples,
+        eikonal_seed=eikonal_seed,
         device=device,
     )
 def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta=1, concat=True, epochs=1000, lr=0.001, alpha=0.1,
-                    eikonal_weight=0.01, eikonal_samples=4096, eikonal_seed=0,
+                    eikonal_weight=0.01, eikonal_samples=None, eikonal_seed=0,
                     device=torch.device("cpu"), logger=None):
     """
     Notes: 1. this function is used to model the stratigraphic surfaces, fault feature encoding for this purpose
@@ -924,7 +928,7 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     lr: the learning rate for training the model
     alpha: the orientation-loss weight, default is 0.1
     eikonal_weight: normalized-coordinate Eikonal-loss weight, default is 0.01
-    eikonal_samples: fixed sample count drawn from the supplied query grid
+    eikonal_samples: required fixed sample count drawn from the supplied query grid
     eikonal_seed: seed used to choose the fixed query-grid samples
     """
     # read the data
@@ -945,6 +949,12 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     y_tensor = torch.tensor(train_data_y, dtype=torch.float32).to(device)
     dy_tensor = torch.tensor(train_orie_y, dtype=torch.float32).to(device)
     test_x_tensor = torch.tensor(normalized_meshgrid_data, dtype=torch.float32).to(device)
+    if eikonal_weight > 0.0 and (
+        eikonal_samples is None or eikonal_samples <= 0
+    ):
+        raise ValueError(
+            "Specify a positive eikonal_samples value; the manuscript does not report N_E."
+        )
     if eikonal_weight > 0.0 and eikonal_samples > 0:
         sample_count = min(eikonal_samples, len(normalized_meshgrid_data))
         sample_rng = np.random.default_rng(eikonal_seed)

@@ -75,9 +75,9 @@ class ExperimentConfig:
     strat_lr: float = 0.001
     orientation_weight: float = 0.1
     eikonal_weight: float = 0.01
-    # The manuscript defines the normalized-coordinate Eikonal term but does
-    # not state its sample count; the runner uses the preregistered R1B value.
-    eikonal_samples: int = 4096
+    # The manuscript defines the Eikonal term but does not report N_E.
+    # Require an explicit run-time value rather than implying a paper value.
+    eikonal_samples: int | None = None
     retained_younger_side: int = 0
     terminal_window_m: float = 80.0
     terminal_horizon_count: int = 3
@@ -126,6 +126,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-checkpoints", action="store_true")
     parser.add_argument("--seeds", type=int, nargs="+")
     parser.add_argument("--variants", nargs="+", choices=VALID_VARIANTS)
+    parser.add_argument(
+        "--eikonal-samples",
+        type=int,
+        required=True,
+        help="Implementation-specific Eikonal sample count; N_E is not reported in the manuscript.",
+    )
     parser.add_argument("--retained-younger-side", type=int, choices=(0, 1))
     return parser.parse_args()
 
@@ -559,6 +565,8 @@ def sample_eikonal_domain_raw(
     seed: int,
 ) -> np.ndarray:
     """Sample a fixed, seed-specific uniform spatial point set for Eikonal loss."""
+    if config.eikonal_samples is None or config.eikonal_samples <= 0:
+        raise ValueError("Set a positive --eikonal-samples value before training.")
     rng = np.random.default_rng(seed)
     normalized_xyz = rng.uniform(-1.0, 1.0, size=(config.eikonal_samples, 3))
     extent = np.asarray(config.extent, dtype=float)
@@ -786,7 +794,9 @@ def summarize(rows: Sequence[Dict[str, object]], output_dir: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    config = ExperimentConfig()
+    config = replace(ExperimentConfig(), eikonal_samples=args.eikonal_samples)
+    if config.eikonal_samples <= 0:
+        raise ValueError("--eikonal-samples must be a positive integer.")
     if args.quick:
         config = quick_config(config)
     if args.seeds:

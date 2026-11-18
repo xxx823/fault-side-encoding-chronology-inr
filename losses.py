@@ -31,26 +31,14 @@ def loss_intf(y_pred, y_true):
     return criterion(y_pred, y_true)
 
 
-# loss function for the orientation points (wrong)
-def loss_grad_wrong(train_x, y_pred, y_true, n_orien):
-    """
-    train_x: the input data, includes the interface points and orientation points, the orientaion points are at the end of the input data
-             train_x = [interface points, orientation points]
-    y_pred: the predicted orientation
-    y_true: the true orientation
-    n_orien: the number of orientation points
-    """
-    gradients = autograd.grad(outputs=y_pred, inputs=train_x, grad_outputs=torch.ones_like(y_pred), create_graph=True)[0]
-    gradients_unit = gradients[-n_orien:,:] / torch.norm(gradients[-n_orien:,:], dim=1, keepdim=True)
-    projection_diff = gradients_unit[:, :3] - y_true
-    loss_grad = torch.norm(projection_diff, dim=1).mean() # this step is wrong, even the same direction, torch.norm will give a value but not 0
-
-    return loss_grad
-
-
 # loss function for the orientation points
 def loss_grad(train_x, y_pred, y_true, n_orien):
     """
+    Direction loss for the fault-surface stage in normalized coordinates.
+
+    ``y_true`` is the observed physical normal transformed by the inverse
+    coordinate Jacobian and normalized before this function is called.
+
     train_x: the input data, includes the interface points and orientation points, the orientaion points are at the end of the input data
              train_x = [interface points, orientation points]
     y_pred: the predicted orientation
@@ -60,7 +48,7 @@ def loss_grad(train_x, y_pred, y_true, n_orien):
     gradients = autograd.grad(outputs=y_pred, inputs=train_x, grad_outputs=torch.ones_like(y_pred), create_graph=True)[0]
     grad_norm_pred = torch.norm(gradients[-n_orien:,:], p=2, dim=1)
     grad_inner_product = torch.einsum('ij, ij->i', y_true, gradients[-n_orien:,:])
-    cosine = grad_inner_product / grad_norm_pred  # orie_tensor using normal orientation
+    cosine = grad_inner_product / (grad_norm_pred + 1e-12)
     loss_grad = torch.mean(1 - cosine)
 
     return loss_grad
