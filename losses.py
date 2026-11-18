@@ -72,24 +72,25 @@ def normalized_to_physical_gradient(gradient_normalized, coordinate_ranges):
 
 
 def loss_grad_with_fault_features(
-    train_x, y_pred, y_true, n_orien, coordinate_ranges
+    coordinate_inputs, y_pred, y_true, n_orien, coordinate_ranges
 ):
     """
-    Note: only the first 3 columns of the orientation points are used for the orientation, the rest columns are fault features (locally the same)
-    train_x: the input data, includes the interface points and orientation points, the orientaion points are at the end of the input data
-             train_x = [interface points, orientation points]
-    y_pred: the predicted orientation
-    y_true: the true orientation
-    n_orien: the number of orientation points
+    Compare physical-space scalar gradients with observed unit normals.
+
+    ``coordinate_inputs`` contains only the three normalized spatial channels.
+    Fault-side features are concatenated into the model input as fixed values,
+    but are not differentiation inputs.
     """
+    if coordinate_inputs.ndim != 2 or coordinate_inputs.shape[1] != 3:
+        raise ValueError("coordinate_inputs must contain only normalized xyz")
     gradients = autograd.grad(
         outputs=y_pred,
-        inputs=train_x,
+        inputs=coordinate_inputs,
         grad_outputs=torch.ones_like(y_pred),
         create_graph=True,
     )[0]
     physical_gradient = normalized_to_physical_gradient(
-        gradients[-n_orien:, :3], coordinate_ranges
+        gradients[-n_orien:], coordinate_ranges
     )
     epsilon = torch.finfo(physical_gradient.dtype).eps
     predicted_unit = physical_gradient / torch.linalg.vector_norm(
@@ -102,19 +103,22 @@ def loss_grad_with_fault_features(
     return torch.mean(1.0 - cosine)
 
 
-def loss_eikonal_normalized(train_x, y_pred):
+def loss_eikonal_normalized(coordinate_inputs, y_pred):
     """Apply a unit-gradient regularizer in normalized spatial coordinates.
 
-    Fault-feature channels are held fixed; only the first three input channels
-    contribute to the spatial gradient.
+    The caller supplies only the three normalized coordinates as differentiation
+    inputs. Any fault-side and valid-domain channels used for the forward pass
+    remain detached fixed conditions.
     """
+    if coordinate_inputs.ndim != 2 or coordinate_inputs.shape[1] != 3:
+        raise ValueError("coordinate_inputs must contain only normalized xyz")
     gradients = autograd.grad(
         outputs=y_pred,
-        inputs=train_x,
+        inputs=coordinate_inputs,
         grad_outputs=torch.ones_like(y_pred),
         create_graph=True,
     )[0]
-    gradient_norm = torch.linalg.vector_norm(gradients[:, :3], dim=1)
+    gradient_norm = torch.linalg.vector_norm(gradients, dim=1)
     return torch.mean((gradient_norm - 1.0) ** 2)
 
 

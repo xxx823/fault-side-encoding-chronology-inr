@@ -400,6 +400,20 @@ def normalize_inputs(values: np.ndarray, extent: Sequence[float]) -> np.ndarray:
     return geological_utils.normalize(np.asarray(values).copy(), list(extent))
 
 
+def model_input_with_fixed_fault_features(
+    values: np.ndarray,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Build model inputs while exposing only normalized xyz to autograd."""
+    coordinates = torch.tensor(
+        values[:, :3], dtype=torch.float32, device=device, requires_grad=True
+    )
+    fault_features = torch.tensor(
+        values[:, 3:], dtype=torch.float32, device=device
+    ).detach()
+    return torch.cat((coordinates, fault_features), dim=1), coordinates
+
+
 def train_stratigraphic_model(
     config: ExperimentConfig,
     interface: np.ndarray,
@@ -419,13 +433,13 @@ def train_stratigraphic_model(
     normalized_orientation = normalize_inputs(orientation_x, config.extent)
     combined = np.vstack((normalized_interface, normalized_orientation))
 
-    x_tensor = torch.tensor(
-        combined, dtype=torch.float32, device=device, requires_grad=True
+    x_tensor, coordinate_tensor = model_input_with_fixed_fault_features(
+        combined, device
     )
     y_tensor = torch.tensor(train_y, dtype=torch.float32, device=device)
     dy_tensor = torch.tensor(orientation_y, dtype=torch.float32, device=device)
-    eikonal_tensor = torch.tensor(
-        eikonal_inputs, dtype=torch.float32, device=device, requires_grad=True
+    eikonal_tensor, eikonal_coordinates = model_input_with_fixed_fault_features(
+        eikonal_inputs, device
     )
     n_interface = normalized_interface.shape[0]
     n_orientation = normalized_orientation.shape[0]
@@ -459,22 +473,22 @@ def train_stratigraphic_model(
 
     for epoch in range(config.strat_epochs):
         optimizer.zero_grad(set_to_none=True)
-        x_tensor.grad = None
+        coordinate_tensor.grad = None
         prediction = model(x_tensor)
         interface_loss = losses.loss_intf_mean(
             prediction[:n_interface].squeeze(), y_tensor
         )
         orientation_loss = losses.loss_grad_with_fault_features(
-            x_tensor,
+            coordinate_tensor,
             prediction,
             dy_tensor,
             n_orientation,
             coordinate_ranges,
         )
-        eikonal_tensor.grad = None
+        eikonal_coordinates.grad = None
         eikonal_prediction = model(eikonal_tensor)
         eikonal_loss = losses.loss_eikonal_normalized(
-            eikonal_tensor, eikonal_prediction
+            eikonal_coordinates, eikonal_prediction
         )
         loss = (
             interface_loss

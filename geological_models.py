@@ -945,7 +945,13 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     # concatenate the interface points and orientation points for training
     train_x_dx = np.vstack((normalized_train_data_x, normalized_train_orie_x))
     # convert to torch tensor and send to GPU
-    x_dx_tensor = torch.tensor(train_x_dx, dtype=torch.float32).to(device).requires_grad_(True)
+    coordinate_tensor = torch.tensor(
+        train_x_dx[:, :3], dtype=torch.float32, device=device, requires_grad=True
+    )
+    fixed_fault_features = torch.tensor(
+        train_x_dx[:, 3:], dtype=torch.float32, device=device
+    ).detach()
+    x_dx_tensor = torch.cat((coordinate_tensor, fixed_fault_features), dim=1)
     y_tensor = torch.tensor(train_data_y, dtype=torch.float32).to(device)
     dy_tensor = torch.tensor(train_orie_y, dtype=torch.float32).to(device)
     test_x_tensor = torch.tensor(normalized_meshgrid_data, dtype=torch.float32).to(device)
@@ -961,14 +967,22 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
         sample_indices = sample_rng.choice(
             len(normalized_meshgrid_data), size=sample_count, replace=False
         )
-        eikonal_x_tensor = torch.tensor(
-            normalized_meshgrid_data[sample_indices],
+        eikonal_samples_array = normalized_meshgrid_data[sample_indices]
+        eikonal_coordinate_tensor = torch.tensor(
+            eikonal_samples_array[:, :3],
             dtype=torch.float32,
             device=device,
             requires_grad=True,
         )
+        eikonal_features = torch.tensor(
+            eikonal_samples_array[:, 3:], dtype=torch.float32, device=device
+        ).detach()
+        eikonal_x_tensor = torch.cat(
+            (eikonal_coordinate_tensor, eikonal_features), dim=1
+        )
     else:
         eikonal_x_tensor = None
+        eikonal_coordinate_tensor = None
     coordinate_ranges = [
         extent[1] - extent[0],
         extent[3] - extent[2],
@@ -998,15 +1012,15 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
         loss_i = losses.loss_intf_mean(y_pred[:n_intf,:].squeeze(), y_tensor)
         # calculate the orientation gradient loss
         loss_o = losses.loss_grad_with_fault_features(
-            x_dx_tensor, y_pred, dy_tensor, n_orie, coordinate_ranges
+            coordinate_tensor, y_pred, dy_tensor, n_orie, coordinate_ranges
         )
         if eikonal_x_tensor is None:
             loss_e = torch.zeros((), dtype=loss_i.dtype, device=device)
         else:
-            eikonal_x_tensor.grad = None
+            eikonal_coordinate_tensor.grad = None
             eikonal_prediction = model(eikonal_x_tensor)
             loss_e = losses.loss_eikonal_normalized(
-                eikonal_x_tensor, eikonal_prediction
+                eikonal_coordinate_tensor, eikonal_prediction
             )
         loss = loss_i + alpha * loss_o + eikonal_weight * loss_e
         if logger is not None:
