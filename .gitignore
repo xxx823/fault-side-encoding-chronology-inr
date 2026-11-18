@@ -4,7 +4,7 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 venv/
-ablation_outputs/
+outputs/
 checkpoints/
 *.pt
 *.pth
@@ -13,7 +13,6 @@ checkpoints/
 *.vtk
 *.png
 *.pdf
+!workflow.png
 !data/case1/fault_meshes/
 !data/case1/fault_meshes/*.vtp
-
-!images/workflow.png

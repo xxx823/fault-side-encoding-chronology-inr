@@ -1,54 +1,87 @@
 # Fault-Side Encoding and Chronology-Constrained INR
 
-**Reproducible code for fault-conditioned implicit neural 3D geological modeling with chronology-constrained valid-domain masks.**
+Code accompanying *Implicit Neural Representation for 3D Geological Modeling Using Fault Side Encoding and Chronology Constraints*.
 
-**Associated manuscript:** *Implicit Neural Representation for 3D Geological Modeling Using Fault Side Encoding and Chronology Constraints*<br>
-**Authors:** Yingxian Chen, Jianzheng Xin, and Pu Wang<br>
-**Corresponding author:** Jianzheng Xin (xinj_zheng@163.com)
+This repository provides the neural implicit modeling components, fault-side feature encoding, and chronology-conditioned valid-domain gating used in the study. Fault geometry and relative chronology are supplied as structural inputs; the code does not infer unknown fault ages or truncation relationships.
 
-This repository accompanies the manuscript and provides the controlled two-fault truncation experiment used to evaluate fault-side encoding and chronology-conditioned valid-domain constraints. It contains the experimental inputs, neural modeling code, and a reproducible four-configuration ablation workflow. The confidential open-pit coal mine dataset is **not** included.
+## Workflow
 
-## Overview
+![Workflow for chronology-constrained fault-side encoding and implicit geological modeling](workflow.png)
 
-Implicit neural representations (INRs) can model stratigraphic scalar fields, but an unconstrained fault-side feature may produce an artificial discontinuity beyond the interpreted termination of a truncated fault. This study uses **prescribed fault chronology and truncation relationships** to determine where each fault feature is active.
+Geological interface and orientation observations, together with interpreted fault surfaces, are converted into network inputs. A chronology rule gates an older fault-side feature according to the retained side of its younger controlling fault. The conditioned inputs are used to learn a stratigraphic scalar field and extract geological interfaces.
 
-The main steps are:
+## Repository layout
 
-1. Represent interpreted fault geometry using implicit fault fields and derive binary fault-side features.
-2. Construct valid-domain masks from the retained-side conditions of younger, controlling faults.
-3. Combine the masked fault-side features with normalized spatial coordinates.
-4. Train a stratigraphic INR using interface, orientation, and Eikonal regularization constraints.
-5. Query the predicted scalar field and extract 3D stratigraphic interfaces.
+~~~text
+fault-side-encoding-chronology-inr/
+├── data/
+│   └── case1/
+│       ├── fault_meshes/
+│       │   ├── fault1_raw.vtp
+│       │   └── fault2_raw.vtp
+│       ├── orientation.csv
+│       └── surface.csv
+├── feature_encoding/
+│   ├── chronology_mask.py
+│   └── fault_side_encoding.py
+├── experiments/
+│   ├── controlled_case.py
+│   └── feature_variants.py
+├── geological_models.py
+├── geological_utils.py
+├── losses.py
+├── networks.py
+├── requirements.txt
+├── LICENSE
+├── workflow.png
+└── README.md
+~~~
 
-**Important:** Fault chronology and truncation relationships are supplied as geological interpretations; they are not automatically inferred from observations by this implementation.
+## Software
 
-## Workflow diagram
+Install the listed dependencies from the repository root:
 
-![Workflow of the chronology-conditioned fault-side encoding and 3D geological modeling framework](images/workflow.png)
-
-*Figure. Overview of the proposed framework. Geological interface, orientation, and fault observations are used to construct fault representations. Binary fault-side states are combined with chronology-based valid-domain constraints. The resulting features condition an implicit neural stratigraphic field, from which 3D geological interfaces are extracted.*
-
-## Software environment
-
-The frozen R1B runs used Python 3.11.17, PyTorch 2.12.1+cu130, CUDA 13.0, and an NVIDIA GeForce RTX 5060 Laptop GPU. The repository pins the following Python packages in `requirements.txt`:
-
-- `torch==2.12.1`
-- `numpy==1.26.4`
-- `pandas==2.2.3`
-- `matplotlib==3.11.2`
-- `pyvista==0.46.4`
-- `vtk==9.5.2`
-
-From the repository root, install the dependencies:
-
-```bash
+~~~bash
 python -m pip install -r requirements.txt
-```
+~~~
 
-For GPU execution, ensure that the installed PyTorch build supports the local CUDA-capable GPU. Different PyTorch/CUDA installations and hardware may lead to different runtimes or small numerical differences.
+The model and feature modules use PyTorch, NumPy, pandas, PyVista, and VTK. GPU use depends on the locally installed PyTorch build and CUDA-compatible hardware.
 
+## Chronology-conditioned feature gating
 
+The feature_encoding/chronology_mask.py module exposes TemporalRule, apply_chronology_mask, and gate_domain_features.
+
+A rule specifies an older fault, a younger controlling fault, and the retained side of the younger fault. For example:
+
+~~~python
+from feature_encoding import TemporalRule, gate_domain_features
+
+rules = [
+    TemporalRule(
+        older_fault="fault1",
+        younger_fault="fault2",
+        retained_younger_side=1,
+    )
+]
+effective_domain, mask_summary = gate_domain_features(
+    domain_features,
+    fault_names=["fault1", "fault2"],
+    rules=rules,
+)
+~~~
+
+The input domain array has columns [X, Y, Z, fault_1, ..., fault_M]. Side features are binary encodings derived from interpreted fault surfaces; they are not exact signed-distance fields. The mask represents the supplied chronology rule and does not establish a unique geological interpretation.
+
+## Data scope
+
+The included data/case1/ files provide the two-fault example inputs distributed with this code. The controlled-case implementation is in experiments/controlled_case.py; its generated outputs are written under outputs/ and are not versioned. The engineering mine dataset is not included.
+
+## Citation
+
+Please cite the associated manuscript:
+
+> Chen, Y., Xin, J., and Wang, P. *Implicit Neural Representation for 3D Geological Modeling Using Fault Side Encoding and Chronology Constraints*. Manuscript.
 
 ## License
 
-This repository is distributed under the [MIT License](LICENSE). See the license file and any notices in the source code for applicable terms.
+This project is distributed under the MIT License. See LICENSE.

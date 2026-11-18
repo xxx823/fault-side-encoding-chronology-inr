@@ -39,7 +39,7 @@ import geological_utils  # noqa: E402
 from feature_encoding.fault_side_encoding import Fault_feature  # noqa: E402
 from networks import ConcatMLP  # noqa: E402
 
-from ablation.feature_variants import (  # noqa: E402
+from experiments.feature_variants import (  # noqa: E402
     VALID_VARIANTS,
     TemporalRule,
     build_variant,
@@ -111,7 +111,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO_ROOT / "ablation_outputs" / "paper_case",
+        default=REPO_ROOT / "outputs" / "controlled_case",
     )
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:N")
     parser.add_argument("--quick", action="store_true", help="Run a non-paper smoke test")
