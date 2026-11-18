@@ -13,3 +13,5 @@ checkpoints/
 *.vtk
 *.png
 *.pdf
+!data/case1/fault_meshes/
+!data/case1/fault_meshes/*.vtp

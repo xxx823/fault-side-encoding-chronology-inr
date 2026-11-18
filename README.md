@@ -1,134 +1,109 @@
-# Fault-Side Encoding and Chronology-Constrained INR
+# Fault-Side Encoding and Chronology-Conditioned INR
 
 ## Associated manuscript
 
 **Title:** Implicit Neural Representation for 3D Geological Modeling Using Fault Side Encoding and Chronology Constraints
-
 **Authors:** Yingxian Chen, Jianzheng Xin, Pu Wang
 
-This repository contains the reproducible implementation of the controlled
-truncation ablation case associated with the manuscript on implicit neural
-representation for 3D geological modelling.
+This repository contains the public two-fault controlled experiment associated
+with the manuscript. The reported R1B experiment uses fixed interpreted fault
+meshes and trains only the stratigraphic INR. The four variants share one
+network width and compare coordinate-only inputs, global side features, and
+chronology-conditioned feature gating.
 
-The main mechanism is:
+The engineering case is separate. Its processed observations and models are
+not included because the project data are confidential. It is reported as a
+five-fold spatial holdout on 220 processed interface points, not as a
+borehole-level validation.
 
-```text
-fault surface -> signed side state -> chronology mask -> masked combination code -> stratigraphic INR
-```
+## Frozen R1B result
 
-The repository is intentionally small. It includes the ablation case entry
-point, the model and loss modules it imports, and the two CSV files required by
-the controlled two-fault example. Engineering-area data are not included.
+The official reference values below come from the 20 frozen R1B runs (four
+variants × five seeds). Values are mean ± sample standard deviation across the
+five seeds. Scalar response is the mean absolute difference across paired
+points on either side of the older fault. The terminal interface RMSE is the
+three-dimensional point-to-predicted-isosurface distance for 15 held-out
+interface points.
 
-## Reported experimental environment
+| Variant | Valid-domain response | Invalid-domain response | Terminal interface RMSE (m) |
+| --- | ---: | ---: | ---: |
+| `coord` | 0.005431 ± 0.000077 | 0.003201 ± 0.000391 | 26.072 ± 1.718 |
+| `coord_zero` | 0.005431 ± 0.000077 | 0.003201 ± 0.000391 | 26.072 ± 1.718 |
+| `global_side` | 0.405550 ± 0.013729 | 0.341252 ± 0.008452 | 29.898 ± 0.893 |
+| `effective_domain` | 0.285234 ± 0.027746 | 0.002309 ± 0.000339 | 22.262 ± 2.340 |
 
-The experiments reported in the manuscript were performed on Windows 11 using
-an Intel Core i7-13790F processor and an NVIDIA GeForce RTX 5060 Ti GPU. The
-software environment was Python 3.12, PyTorch 2.6.0, and CUDA 12.8.
+The paired invalid-response reduction for `effective_domain` relative to
+`global_side` has a five-seed median of 99.36%. This is a controlled
+two-fault mechanism result under fixed geometry and a prescribed retained-side
+rule; it is not a physical fault-displacement estimate or a claim of general
+topology recovery. Per-seed results and their provenance are in
+[`paper_results/r1b`](paper_results/r1b/README.md).
 
-The paper-parameter runner is configured to use CUDA for strict reproduction
-of the reported experiments. CPU execution and other CUDA devices remain
-possible for portability, but their runtime and numerical results may differ.
+## R1B data and code
 
-## Requirements
+The experiment reads four hash-checked inputs:
 
-- Windows 11
-- Python 3.12
-- PyTorch 2.6.0
-- CUDA 12.8
-- NumPy, pandas, Matplotlib, PyVista, and VTK
+- `data/case1/surface.csv`
+- `data/case1/orientation.csv`
+- `data/case1/fault_meshes/fault1_raw.vtp`
+- `data/case1/fault_meshes/fault2_raw.vtp`
 
-Install the pinned paper environment with:
+The feature and training implementation is in `ablation/`. The corrected
+orientation loss maps normalized-coordinate gradients into physical space with
+the normalization Jacobian. The Eikonal term is evaluated in normalized
+coordinate space on 4096 fixed points per seed, shared across the four
+variants. Fault-side features are derived from the fixed input meshes; the R1B
+run does not train a fault network.
+
+Run a read-only preflight to validate the inputs and inspect the locked run
+configuration:
 
 ```bash
+python -m ablation.r1b_experiment --preflight-only
+```
+
+To intentionally run all 20 neural trainings, pass the explicit flag below.
+Results are written to the ignored `ablation_outputs/r1b_formal` directory.
+
+```bash
+python -m ablation.r1b_experiment --run-formal --device cuda
+```
+
+Use `--device auto` for a CPU fallback. Numerical results can vary across
+hardware and library builds. `--finalize-only` aggregates an already completed
+run and does not train.
+
+The existing `ablation/case_paper_parameters.py` is retained as a legacy
+runner for earlier experiments. It is not the source of the frozen R1B values
+above and should not be used to reproduce the current manuscript tables.
+
+## Recorded environment
+
+The frozen R1B and R1C runs used Python 3.11.17, PyTorch 2.12.1+cu130, CUDA
+13.0, NumPy 1.26.4, pandas 2.2.3, Matplotlib 3.11.2, PyVista 0.46.4, and VTK
+9.5.2. Install the matching PyTorch CUDA wheel first, then the other pinned
+packages:
+
+```bash
+python -m pip install torch==2.12.1 --index-url https://download.pytorch.org/whl/cu130
 python -m pip install -r requirements-paper.txt
 ```
 
-For a CUDA installation, install the PyTorch wheel appropriate for the local
-GPU first, then install the remaining packages from the requirements file.
+## R1C engineering comparison scope
 
-## Input data
-
-The controlled two-fault ablation example uses two input files in `data/case1/`:
-
-- `surface.csv`: stratigraphic interface points and fault-surface points with spatial coordinates and geological labels.
-- `orientation.csv`: stratigraphic and fault orientation samples with spatial coordinates and direction vectors.
-
-These files contain only the controlled experimental data used for the ablation example and do not include data from the confidential engineering case.
-
-## Quick smoke test
-
-Run one seed and one configuration to verify the installation:
-
-```bash
-python ablation/case_paper_parameters.py --device cuda --seeds 0 --variants effective_domain
-```
-
-This command writes the outputs to `ablation_outputs/paper_case`.
-
-## Full ablation case
-
-The paper-parameter run uses four configurations and five random seeds. Use
-`--device auto` only when intentionally running on a different machine and
-accepting a CPU fallback:
-
-```bash
-python ablation/case_paper_parameters.py --device cuda --rebuild-faults
-```
-
-The four configurations are:
-
-1. spatial coordinates only;
-2. coordinates with zero placeholders;
-3. coordinates with global fault-side encoding;
-4. coordinates with fault-side encoding and chronology-constrained valid-domain masking.
-
-The reported protocol uses 2 hidden layers with 256 units, Adam with a
-learning rate of 0.001, fault Softplus beta 10, stratigraphic Softplus beta 1,
-500 fault epochs, and 1000 stratigraphic epochs. The evaluation uses 5 m
-cross-fault offsets, a 10 m boundary exclusion, a fixed 80--320 m
-terminal-region window, and 15 fixed holdout interface points.
-
-## Outputs
-
-Each seed/configuration directory contains:
-
-- `scalar_field.vti`: queried implicit scalar field;
-- `interfaces.vtp`: extracted stratigraphic interfaces;
-- `cross_fault_samples.vtp`: paired evaluation samples;
-- `loss_history.csv`: training history;
-- `metrics.json`: per-run metrics.
-
-The output root also contains `metrics_summary.csv`, `metrics_all_runs.csv`,
-`run_config.json`, and the ablation summary plot.
-
-## Expected behaviour
-
-The four ablation configurations are expected to show distinct structural responses.
-
-Global fault-side encoding should produce a clear scalar difference across the fault within its valid region. After the chronology-constrained valid-domain mask is introduced, the residual scalar response beyond the fault termination should be strongly suppressed, while the interface reconstruction near the termination should improve.
-
-For the full five-seed experiment, the results should reproduce the same trends as those reported in the manuscript.
-
-The reference results reported in the manuscript are:
-
-| Configuration | Valid-region scalar difference | Invalid-region residual | Interface RMSE (m) |
-| --- | ---: | ---: | ---: |
-| Spatial coordinates only | 0.00542 ± 0.00010 | 0.00195 ± 0.00010 | 25.57 ± 1.00 |
-| Zero-vector placeholder | 0.00553 ± 0.00012 | 0.00196 ± 0.00016 | 26.01 ± 1.35 |
-| Global fault-side encoding | 0.44571 ± 0.01194 | 0.35995 ± 0.00218 | 29.31 ± 0.35 |
-| Fault-side encoding + valid-domain constraint | 0.29998 ± 0.01216 | 0.00118 ± 0.00005 | 24.43 ± 0.86 |
-
-## Reproducibility notes
-
-The fault above/below option is enabled in the paper-parameter runner; the
-included data currently produce a zero numerical above/below term.
-
-The included CSV files are the redistributable input data used for the
-controlled two-fault ablation experiment described in the manuscript. They do
-not contain data from the confidential engineering case.
+R1C used a fixed four-fault prior, five XY spatial folds, three seeds, and
+three neural variants (45 training cells). The held-out targets were processed
+interface observations; no borehole identifiers were available. Neural
+geometry MAE averaged across the 15 fold-seed cells was 121.905 ± 22.249 m for
+`coord`, 106.091 ± 26.511 m for `global_side`, and 102.777 ± 31.175 m for
+`effective_domain`. The LoopStructural 1.6.27 FDI reference produced a
+five-fold geometry MAE of 30.094 ± 23.743 m. The FDI reference did not receive
+fault displacement or slip-direction priors, so it is not an equivalent
+fault-kinematic comparison. Engineering data, models, and fold-level files
+remain outside this public repository.
 
 ## Citation and contact
 
-Please cite the associated manuscript when using this code. Include the
-repository URL and author contact in the final citation information.
+Please cite the associated manuscript when using this code. The repository
+contains the redistributable controlled-case inputs; it does not contain the
+confidential engineering data.

@@ -1,10 +1,9 @@
-"""Paper-parameter ablation-case runner.
+"""Legacy paper-parameter ablation runner; not the frozen R1B runner.
 
-This wrapper keeps the original ablation data preparation and evaluation protocol,
-but replaces the training configuration with the values reported in Table 1 of
-the manuscript. It also enables the fault above/below constraint and evaluates
-the stratigraphic Eikonal term on uniformly sampled points inside the modeling
-domain.
+This earlier runner is retained for historical experiments. It reconstructs
+fault meshes during the run and does not implement the corrected R1B physical
+orientation-gradient protocol. Use ``python -m ablation.r1b_experiment`` for the
+current controlled experiment and its frozen paper results.
 """
 
 from __future__ import annotations
