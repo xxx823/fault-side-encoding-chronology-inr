@@ -379,7 +379,7 @@ def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolut
     return predic_list, grid_mesh_final
 
 def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
-                    n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001,
+                    n_hidden_layers, activation='Softplus', beta_list=None, concat=True, epochs=500, lr=0.001,
                     eikonal_weight=0.0, eikonal_samples=0, above_below=False,
                     device=torch.device("cpu"), logger=None):
     """
@@ -395,7 +395,7 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
     out_dim: the output dimension, a scalar value
     n_hidden_layers: the number of hidden layers
     activation: the activation function, default is 'Softplus'
-    beta_list: the beta parameter in the Softplus activation function, effective when the activation function is Softplus
+    beta_list: per-fault Softplus beta values; defaults to 10 for each fault
     concat: whether to concatenate the input features with the hidden layer features
     epochs: the number of epochs for training the model
     lr: the learning rate for training the model
@@ -406,6 +406,8 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
     # read the data
     fault_surf_point = interface_points[interface_points['type'] == 'fault']
     fault_orie_point = orientation_points[orientation_points['type'] == 'fault']
+    if beta_list is None:
+        beta_list = [10.0] * fault_surf_point['formation'].nunique()
     mesh = []
     n = 0
     # whether to use the above and below constraints
@@ -867,115 +869,40 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
     
     return mesh, features
 
-def stratigraphic_ConcatMLP_neighbor(interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim, hidden_dim, out_dim,
-                    n_hidden_layers, activation='Softplus', beta=1, concat=False, epochs=2000, lr=0.001, delta_orie=1, alpha=0.1, 
-                    device=torch.device("cpu")):
+def stratigraphic_ConcatMLP_neighbor(
+    interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim,
+    hidden_dim, out_dim, n_hidden_layers, activation="Softplus", beta=1,
+    concat=True, epochs=1000, lr=0.001, delta_orie=1, alpha=0.1,
+    device=torch.device("cpu"),
+):
+    """Compatibility wrapper for the manuscript-aligned stratigraphic trainer.
+
+    ``delta_orie`` is retained for callers of the historical API. Orientation
+    gradients are computed by automatic differentiation with the physical
+    coordinate Jacobian, as specified by the manuscript.
     """
-    Notes: 1. this function is used to model the stratigraphic surfaces, fault feature encoding for this purpose
-           2. use neighbor points of orientation to calculate the orientation gradient
-    interface_data: the data comes from the feature encoding results, the list is [label, x, y, z, fault1, fault2, ...], 
-                    label value in range [-1, 1], fault1, fault2 are the fault feature encoding results
-    orientation_data: the data comes from the feature encoding results, the list is [x, y, z, dx, dy, dz, fault1, fault2, ...],
-    meshgrid_data: the meshgrid points for predicting the domain, the format is [x, y, z, fault1, fault2, ...]
-    extent: the extent of the model
-    resolution: the resolution of the model
-    in_dim: the input dimension of the neural network
-    hidden_dim: the hidden layer dimension
-    out_dim: the output dimension, a scalar value
-    n_hidden_layers: the number of hidden layers
-    activation: the activation function, default is 'Softplus'
-    beta: the beta parameter in the Softplus activation function, effective when the activation function is Softplus
-    concat: whether to concatenate the input features with the hidden layer features
-    epochs: the number of epochs for training the model
-    lr: the learning rate for training the model
-    delta_orie: the delta value for calculating the orientation gradient, set as 1 means the gradient is calculated by the difference of 1 cell
-    alpha: the weight of the orientation loss, default is 0.1
-    """
-    # read the data
-    train_data_x = interface_data[:, 1:].astype(np.float)
-    train_data_y = interface_data[:, 0]
-    train_orie_x = np.delete(orientation_data.copy(), [3,4,5], axis=1).astype(np.float64)
-    train_orie_y = orientation_data[:,3:6].astype(np.float64)
-    # normalize the data
-    normalized_train_data_x = geological_utils.normalize(train_data_x, extent)
-    normalized_train_orie_x = geological_utils.normalize(train_orie_x, extent)
-    normalized_meshgrid_data = geological_utils.normalize(meshgrid_data, extent)
-    # key step: the additional orientation points for calculating the orientation gradient should with the same fault feature as orientation points
-    normalized_additional_orie_x6 = geological_utils.delta_cal_orie(normalized_train_orie_x, resolution=resolution, delta=delta_orie)
-
-    # concatenate the interface points and orientation points for training
-    train_x_dx = np.vstack((normalized_train_data_x, normalized_additional_orie_x6))
-    # convert to torch tensor and send to GPU
-    x_dx_tensor = torch.tensor(train_x_dx, dtype=torch.float32).to(device)
-    y_tensor = torch.tensor(train_data_y, dtype=torch.float32).to(device)
-    dy_tensor = torch.tensor(train_orie_y, dtype=torch.float32).to(device)
-    test_x_tensor = torch.tensor(normalized_meshgrid_data, dtype=torch.float32).to(device)
-    # the number of interface points and orientation points for dividing the input tensor to send to loss functions
-    n_intf = normalized_train_data_x.shape[0]
-    n_orie = normalized_train_orie_x.shape[0]
-    # train the model
-    model = ConcatMLP(in_dim=in_dim,
-                        hidden_dim=hidden_dim,
-                        out_dim=out_dim,
-                        n_hidden_layers=n_hidden_layers,
-                        activation=activation,
-                        beta=beta,
-                        concat=concat,
-                        ).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)  #Adam
-    # Initialize variables to track minimum loss and corresponding parameters
-    min_loss = float('inf')
-    best_params = None
-
-    t1_train = time.time()
-    for epoch in range(epochs):
-        y_pred = model(x_dx_tensor)  
-        # calculate the interface loss
-        loss_i = losses.loss_intf(y_pred[:n_intf,:].squeeze(), y_tensor)
-        # calculate the orientation gradient loss
-        xyz_grad = geological_utils.compute_gradient(y_pred[n_intf:,:], n_orie, resolution=resolution, delta=delta_orie)
-        loss_o = geological_utils.calculate_grad_loss(xyz_grad[:,:], dy_tensor[:,:])
-        loss = loss_i + alpha * loss_o
-        if loss < min_loss:
-            min_loss = loss
-            # Save the current parameters of the model
-            best_params = copy.deepcopy(model.state_dict())
-            min_loss_i = loss_i
-            min_loss_o = loss_o
-        # Zero gradients, perform a backward pass, and update the weights.
-        optimizer.zero_grad()
-        loss.backward(retain_graph=True)
-        optimizer.step()
-    t2_train = time.time()
-    
-    print(f'Training losses | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}')
-    print(f'each epoch training time :  {(t2_train - t1_train) / epochs} seconds')
-    # model for inference
-    best_model = ConcatMLP(in_dim=in_dim,
-                        hidden_dim=hidden_dim,
-                        out_dim=out_dim,
-                        n_hidden_layers=n_hidden_layers,
-                        activation=activation,
-                        beta=beta,
-                        concat=concat,
-                        ).to(device)
-    best_model.load_state_dict(best_params)
-    # Predict with the model
-    with torch.no_grad():
-        t1_inference = time.time()
-        predictions = best_model(test_x_tensor).cpu().numpy()
-        t2_inference = time.time()
-    # convert to pyvista mesh
-    # get the iso values for extracting the stratigraphic surfaces
-    iso_values = np.unique(interface_data[:, 0])
-    stratigraphic_mesh, grid_mesh_final = geological_utils.predict_to_mesh_stratigraphic(extent, resolution, predictions, iso_values)
-    print(f'Inference time: {t2_inference - t1_inference} seconds')
-    print('------Finish-------')
-    
-    return stratigraphic_mesh, grid_mesh_final
-
+    del delta_orie
+    return stratigraphic_ConcatMLP(
+        interface_data=interface_data,
+        orientation_data=orientation_data,
+        meshgrid_data=meshgrid_data,
+        extent=extent,
+        resolution=resolution,
+        in_dim=in_dim,
+        hidden_dim=hidden_dim,
+        out_dim=out_dim,
+        n_hidden_layers=n_hidden_layers,
+        activation=activation,
+        beta=beta,
+        concat=concat,
+        epochs=epochs,
+        lr=lr,
+        alpha=alpha,
+        device=device,
+    )
 def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim, hidden_dim, out_dim,
-                    n_hidden_layers, activation='Softplus', beta=1, concat=False, epochs=2000, lr=0.001, alpha=0.1,
+                    n_hidden_layers, activation='Softplus', beta=1, concat=True, epochs=1000, lr=0.001, alpha=0.1,
+                    eikonal_weight=0.01, eikonal_samples=4096, eikonal_seed=0,
                     device=torch.device("cpu"), logger=None):
     """
     Notes: 1. this function is used to model the stratigraphic surfaces, fault feature encoding for this purpose
@@ -995,8 +922,10 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     concat: whether to concatenate the input features with the hidden layer features
     epochs: the number of epochs for training the model
     lr: the learning rate for training the model
-    delta_orie: the delta value for calculating the orientation gradient, set as 1 means the gradient is calculated by the difference of 1 cell
-    alpha: the weight of the orientation loss, default is 0.1
+    alpha: the orientation-loss weight, default is 0.1
+    eikonal_weight: normalized-coordinate Eikonal-loss weight, default is 0.01
+    eikonal_samples: fixed sample count drawn from the supplied query grid
+    eikonal_seed: seed used to choose the fixed query-grid samples
     """
     # read the data
     train_data_x = interface_data[:, 1:].astype(np.float64)
@@ -1016,6 +945,25 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     y_tensor = torch.tensor(train_data_y, dtype=torch.float32).to(device)
     dy_tensor = torch.tensor(train_orie_y, dtype=torch.float32).to(device)
     test_x_tensor = torch.tensor(normalized_meshgrid_data, dtype=torch.float32).to(device)
+    if eikonal_weight > 0.0 and eikonal_samples > 0:
+        sample_count = min(eikonal_samples, len(normalized_meshgrid_data))
+        sample_rng = np.random.default_rng(eikonal_seed)
+        sample_indices = sample_rng.choice(
+            len(normalized_meshgrid_data), size=sample_count, replace=False
+        )
+        eikonal_x_tensor = torch.tensor(
+            normalized_meshgrid_data[sample_indices],
+            dtype=torch.float32,
+            device=device,
+            requires_grad=True,
+        )
+    else:
+        eikonal_x_tensor = None
+    coordinate_ranges = [
+        extent[1] - extent[0],
+        extent[3] - extent[2],
+        extent[5] - extent[4],
+    ]
     # the number of interface points and orientation points for dividing the input tensor to send to loss functions
     n_intf = normalized_train_data_x.shape[0]
     n_orie = normalized_train_orie_x.shape[0]
@@ -1028,7 +976,7 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
                         beta=beta,
                         concat=concat,
                         ).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)  #Adam
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # Initialize variables to track minimum loss and corresponding parameters
     min_loss = float('inf')
     best_params = None
@@ -1039,8 +987,18 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
         # calculate the interface loss
         loss_i = losses.loss_intf_mean(y_pred[:n_intf,:].squeeze(), y_tensor)
         # calculate the orientation gradient loss
-        loss_o = losses.loss_grad_with_fault_features(x_dx_tensor, y_pred, dy_tensor, n_orie)
-        loss = loss_i + alpha * loss_o
+        loss_o = losses.loss_grad_with_fault_features(
+            x_dx_tensor, y_pred, dy_tensor, n_orie, coordinate_ranges
+        )
+        if eikonal_x_tensor is None:
+            loss_e = torch.zeros((), dtype=loss_i.dtype, device=device)
+        else:
+            eikonal_x_tensor.grad = None
+            eikonal_prediction = model(eikonal_x_tensor)
+            loss_e = losses.loss_eikonal_normalized(
+                eikonal_x_tensor, eikonal_prediction
+            )
+        loss = loss_i + alpha * loss_o + eikonal_weight * loss_e
         if logger is not None:
             logger.log(
                 stage_name='stratigraphic_main',
@@ -1057,13 +1015,17 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
             best_params = copy.deepcopy(model.state_dict())
             min_loss_i = loss_i
             min_loss_o = loss_o
+            min_loss_e = loss_e
         # Zero gradients, perform a backward pass, and update the weights.
         optimizer.zero_grad()
         loss.backward(retain_graph=True)
         optimizer.step()
     t2_train = time.time()
     
-    print(f'Training losses | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}')
+    print(
+        f'Training losses | Loss_i: {min_loss_i.item()}, '
+        f'Loss_o: {min_loss_o.item()}, Loss_e: {min_loss_e.item()}'
+    )
     if logger is not None:
         logger.save_stage_csv('stratigraphic_main')
         logger.plot_stage('stratigraphic_main', smooth_window=31)

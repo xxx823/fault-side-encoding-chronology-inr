@@ -67,7 +67,25 @@ def loss_grad(train_x, y_pred, y_true, n_orien):
 
 
 # loss function for the orientation points
-def loss_grad_with_fault_features(train_x, y_pred, y_true, n_orien):
+def normalized_to_physical_gradient(gradient_normalized, coordinate_ranges):
+    """Convert gradients from normalized coordinates to physical coordinates.
+
+    For ``u_i = 2 * (x_i - center_i) / range_i``, the chain rule gives
+    ``grad_x = diag(2 / range_i) @ grad_u``.
+    """
+    ranges = torch.as_tensor(
+        coordinate_ranges,
+        dtype=gradient_normalized.dtype,
+        device=gradient_normalized.device,
+    ).reshape(-1)
+    if ranges.numel() != 3 or torch.any(ranges <= 0):
+        raise ValueError("coordinate_ranges must contain three positive physical ranges")
+    return gradient_normalized[..., :3] * (2.0 / ranges)
+
+
+def loss_grad_with_fault_features(
+    train_x, y_pred, y_true, n_orien, coordinate_ranges
+):
     """
     Note: only the first 3 columns of the orientation points are used for the orientation, the rest columns are fault features (locally the same)
     train_x: the input data, includes the interface points and orientation points, the orientaion points are at the end of the input data
@@ -76,14 +94,40 @@ def loss_grad_with_fault_features(train_x, y_pred, y_true, n_orien):
     y_true: the true orientation
     n_orien: the number of orientation points
     """
-    gradients = autograd.grad(outputs=y_pred, inputs=train_x, grad_outputs=torch.ones_like(y_pred), create_graph=True)[0]
-    grad_norm_pred = torch.norm(gradients[-n_orien:,:3], p=2, dim=1)
-    grad_inner_product = torch.einsum('ij, ij->i', y_true, gradients[-n_orien:,:3])
-    cosine = grad_inner_product / (grad_norm_pred + 1e-12)
-    # Eq. (8) uses the mean directional discrepancy over orientation samples.
-    loss_grad = torch.mean(1 - cosine)
+    gradients = autograd.grad(
+        outputs=y_pred,
+        inputs=train_x,
+        grad_outputs=torch.ones_like(y_pred),
+        create_graph=True,
+    )[0]
+    physical_gradient = normalized_to_physical_gradient(
+        gradients[-n_orien:, :3], coordinate_ranges
+    )
+    epsilon = torch.finfo(physical_gradient.dtype).eps
+    predicted_unit = physical_gradient / torch.linalg.vector_norm(
+        physical_gradient, dim=1, keepdim=True
+    ).clamp_min(epsilon)
+    observed_unit = y_true / torch.linalg.vector_norm(
+        y_true, dim=1, keepdim=True
+    ).clamp_min(epsilon)
+    cosine = torch.sum(predicted_unit * observed_unit, dim=1)
+    return torch.mean(1.0 - cosine)
 
-    return loss_grad
+
+def loss_eikonal_normalized(train_x, y_pred):
+    """Apply a unit-gradient regularizer in normalized spatial coordinates.
+
+    Fault-feature channels are held fixed; only the first three input channels
+    contribute to the spatial gradient.
+    """
+    gradients = autograd.grad(
+        outputs=y_pred,
+        inputs=train_x,
+        grad_outputs=torch.ones_like(y_pred),
+        create_graph=True,
+    )[0]
+    gradient_norm = torch.linalg.vector_norm(gradients[:, :3], dim=1)
+    return torch.mean((gradient_norm - 1.0) ** 2)
 
 
 # loss function for the above 

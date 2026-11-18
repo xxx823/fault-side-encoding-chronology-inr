@@ -52,8 +52,8 @@ class ExperimentConfig:
     surface_csv: str = "data/case1/surface.csv"
     orientation_csv: str = "data/case1/orientation.csv"
     extent: Tuple[float, ...] = (-1800, 164, -160, 1400, 500, 1450)
-    fault_resolution: Tuple[int, ...] = (37, 27, 27)
-    grid_resolution: Tuple[int, ...] = (140, 96, 96)
+    fault_resolution: Tuple[int, ...] = (60, 30, 30)
+    grid_resolution: Tuple[int, ...] = (100, 100, 100)
     fault_names: Tuple[str, ...] = ("fault1", "fault2")
     movement: Tuple[str, ...] = ("up", "down")
     fault_direction: Tuple[str, ...] = ("left", "right")
@@ -62,21 +62,28 @@ class ExperimentConfig:
     fault_hidden_dim: int = 256
     fault_hidden_layers: int = 2
     fault_beta: Tuple[float, ...] = (10.0, 10.0)
-    fault_epochs: int = 1000
+    fault_epochs: int = 500
     fault_lr: float = 0.001
+    # The manuscript does not report a separate fault-stage Eikonal weight.
     fault_eikonal_weight: float = 0.0
     fault_eikonal_samples: int = 0
     fault_above_below: bool = False
-    strat_hidden_dim: int = 512
-    strat_hidden_layers: int = 4
-    strat_beta: float = 210.0
-    strat_epochs: int = 2000
+    strat_hidden_dim: int = 256
+    strat_hidden_layers: int = 2
+    strat_beta: float = 1.0
+    strat_epochs: int = 1000
     strat_lr: float = 0.001
-    orientation_weight: float = 0.05
-    terminal_window_cells: float = 8.0
+    orientation_weight: float = 0.1
+    eikonal_weight: float = 0.01
+    # The manuscript defines the normalized-coordinate Eikonal term but does
+    # not state its sample count; the runner uses the preregistered R1B value.
+    eikonal_samples: int = 4096
+    retained_younger_side: int = 0
+    terminal_window_m: float = 80.0
+    terminal_horizon_count: int = 3
     terminal_holdout_per_layer: int = 5
-    cross_fault_epsilon_cells: float = 0.5
-    boundary_exclusion_epsilon: float = 2.0
+    cross_fault_offset_m: float = 5.0
+    boundary_exclusion_m: float = 10.0
     max_cross_fault_samples: int = 2000
     prediction_batch_size: int = 131072
     seeds: Tuple[int, ...] = (0, 1, 2, 3, 4)
@@ -274,42 +281,6 @@ def implicit_distance(mesh: pv.DataSet, coordinates: np.ndarray) -> np.ndarray:
     return np.asarray(result.point_data["implicit_distance"], dtype=float).reshape(-1)
 
 
-def infer_retained_side(
-    config: ExperimentConfig,
-    surface: pd.DataFrame,
-    meshes: Sequence[pv.DataSet],
-) -> Tuple[int, Dict[str, float]]:
-    older_idx = config.fault_names.index(config.older_fault)
-    younger_idx = config.fault_names.index(config.younger_fault)
-    del older_idx  # The observation coordinates, rather than the old fitted surface, are used.
-
-    older_observations = surface.loc[
-        (surface["type"] == "fault")
-        & (surface["formation"] == config.older_fault),
-        ["X", "Y", "Z"],
-    ].to_numpy(dtype=float)
-    sides = encoded_side(
-        meshes[younger_idx],
-        older_observations,
-        config.movement[younger_idx],
-        config.fault_direction[younger_idx],
-    )
-    side_one_fraction = float(np.isclose(sides, 1.0).mean())
-    retained = int(side_one_fraction >= 0.5)
-    agreement = max(side_one_fraction, 1.0 - side_one_fraction)
-    if agreement < 0.7:
-        raise RuntimeError(
-            "The retained side cannot be inferred reliably: only "
-            f"{agreement:.1%} of older-fault observations agree. "
-            "Pass --retained-younger-side explicitly after checking the geometry."
-        )
-    return retained, {
-        "older_fault_observations": int(len(sides)),
-        "younger_side_one_fraction": side_one_fraction,
-        "retained_side_agreement": agreement,
-    }
-
-
 def feature_encode_all(
     config: ExperimentConfig,
     meshes: Sequence[pv.DataSet],
@@ -352,10 +323,15 @@ def choose_terminal_holdout(
     xyz = interface[:, 1:4]
     old_distance = np.abs(implicit_distance(meshes[old_idx], xyz))
     young_distance = np.abs(implicit_distance(meshes[young_idx], xyz))
-    base_window = config.terminal_window_cells * float(cell_spacing(config).min())
+    base_window = config.terminal_window_m
 
     holdout = np.zeros(len(interface), dtype=bool)
     labels = np.unique(interface[:, 0])
+    if labels.size != config.terminal_horizon_count:
+        raise RuntimeError(
+            f"Expected {config.terminal_horizon_count} interface horizons, "
+            f"found {labels.size}."
+        )
     selection_by_label: Dict[str, object] = {}
     proximity_score = np.sqrt(
         (old_distance / base_window) ** 2 + (young_distance / base_window) ** 2
@@ -363,34 +339,28 @@ def choose_terminal_holdout(
 
     for label in labels:
         layer_indices = np.flatnonzero(np.isclose(interface[:, 0], label))
-        target = min(config.terminal_holdout_per_layer, layer_indices.size - 1)
-        if target < 1:
-            raise RuntimeError(f"Layer {label} has too few interface points")
-
-        eligible = np.array([], dtype=int)
-        selected_factor = None
-        for factor in (1.0, 2.0, 3.0, 4.0):
-            within = (
-                (old_distance[layer_indices] <= factor * base_window)
-                & (young_distance[layer_indices] <= factor * base_window)
+        target = config.terminal_holdout_per_layer
+        if layer_indices.size <= target:
+            raise RuntimeError(
+                f"Layer {label} needs at least {target + 1} interface points "
+                "to hold out the manuscript-specified count."
             )
-            eligible = layer_indices[within]
-            if eligible.size >= target:
-                selected_factor = factor
-                break
+        within = (
+            (old_distance[layer_indices] <= base_window)
+            & (young_distance[layer_indices] <= base_window)
+        )
+        eligible = layer_indices[within]
         if eligible.size < target:
-            # Keep the sample count fixed even for a sparsely sampled layer,
-            # but record that the nearest-point fallback was required.
-            eligible = layer_indices
-            selection_rule = "nearest_intersection_fallback"
-        else:
-            selection_rule = f"both_faults_within_{selected_factor:g}x_window"
+            raise RuntimeError(
+                f"Layer {label} has {eligible.size} points within the "
+                f"{base_window:g} m terminal window; {target} are required."
+            )
 
         ordered = eligible[np.argsort(proximity_score[eligible], kind="stable")]
         selected = ordered[:target]
         holdout[selected] = True
         selection_by_label[str(float(label))] = {
-            "selection_rule": selection_rule,
+            "selection_rule": f"both_faults_within_fixed_{base_window:g}m_window",
             "eligible_count": int(eligible.size),
             "holdout_count": int(selected.size),
             "max_old_fault_distance": float(old_distance[selected].max()),
@@ -399,7 +369,7 @@ def choose_terminal_holdout(
 
     if holdout.sum() < 3:
         raise RuntimeError(
-            "Too few terminal holdout points were found. Increase terminal_window_cells."
+            "Too few terminal holdout points were found in the fixed manuscript window."
         )
     if np.any(
         [
@@ -429,6 +399,7 @@ def train_stratigraphic_model(
     interface: np.ndarray,
     orientation: np.ndarray,
     seed: int,
+    eikonal_inputs: np.ndarray,
     device: torch.device,
 ) -> Tuple[ConcatMLP, List[Dict[str, float]], Dict[str, object]]:
     train_x = interface[:, 1:].astype(np.float64)
@@ -447,8 +418,16 @@ def train_stratigraphic_model(
     )
     y_tensor = torch.tensor(train_y, dtype=torch.float32, device=device)
     dy_tensor = torch.tensor(orientation_y, dtype=torch.float32, device=device)
+    eikonal_tensor = torch.tensor(
+        eikonal_inputs, dtype=torch.float32, device=device, requires_grad=True
+    )
     n_interface = normalized_interface.shape[0]
     n_orientation = normalized_orientation.shape[0]
+    coordinate_ranges = [
+        config.extent[1] - config.extent[0],
+        config.extent[3] - config.extent[2],
+        config.extent[5] - config.extent[4],
+    ]
 
     set_seed(seed)
     model = ConcatMLP(
@@ -464,7 +443,7 @@ def train_stratigraphic_model(
     for name, value in model.state_dict().items():
         initialization_hash.update(name.encode("utf-8"))
         initialization_hash.update(value.detach().cpu().numpy().tobytes())
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.strat_lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.strat_lr)
 
     best_loss = float("inf")
     best_state = None
@@ -480,9 +459,22 @@ def train_stratigraphic_model(
             prediction[:n_interface].squeeze(), y_tensor
         )
         orientation_loss = losses.loss_grad_with_fault_features(
-            x_tensor, prediction, dy_tensor, n_orientation
+            x_tensor,
+            prediction,
+            dy_tensor,
+            n_orientation,
+            coordinate_ranges,
         )
-        loss = interface_loss + config.orientation_weight * orientation_loss
+        eikonal_tensor.grad = None
+        eikonal_prediction = model(eikonal_tensor)
+        eikonal_loss = losses.loss_eikonal_normalized(
+            eikonal_tensor, eikonal_prediction
+        )
+        loss = (
+            interface_loss
+            + config.orientation_weight * orientation_loss
+            + config.eikonal_weight * eikonal_loss
+        )
         if not torch.isfinite(loss):
             raise FloatingPointError(
                 f"Non-finite training loss at seed={seed}, epoch={epoch + 1}"
@@ -495,6 +487,10 @@ def train_stratigraphic_model(
                 "total_loss": loss_value,
                 "interface_loss": float(interface_loss.detach().cpu()),
                 "orientation_loss": float(orientation_loss.detach().cpu()),
+                "eikonal_loss": float(eikonal_loss.detach().cpu()),
+                "weighted_eikonal_loss": float(
+                    (config.eikonal_weight * eikonal_loss).detach().cpu()
+                ),
             }
         )
         if loss_value < best_loss:
@@ -557,6 +553,23 @@ def raw_domain_for_points(
     return np.column_stack(columns)
 
 
+def sample_eikonal_domain_raw(
+    config: ExperimentConfig,
+    meshes: Sequence[pv.DataSet],
+    seed: int,
+) -> np.ndarray:
+    """Sample a fixed, seed-specific uniform spatial point set for Eikonal loss."""
+    rng = np.random.default_rng(seed)
+    normalized_xyz = rng.uniform(-1.0, 1.0, size=(config.eikonal_samples, 3))
+    extent = np.asarray(config.extent, dtype=float)
+    lower = extent[[0, 2, 4]]
+    ranges = np.array(
+        [extent[1] - extent[0], extent[3] - extent[2], extent[5] - extent[4]]
+    )
+    physical_xyz = lower + (normalized_xyz + 1.0) * ranges / 2.0
+    return raw_domain_for_points(config, meshes, physical_xyz)
+
+
 def inside_extent(points: np.ndarray, extent: Sequence[float]) -> np.ndarray:
     extent = np.asarray(extent, dtype=float)
     return (
@@ -591,7 +604,7 @@ def prepare_cross_fault_pairs(
     centers = np.asarray(old_surface.points, dtype=float)
     normals = np.asarray(old_surface.point_data["Normals"], dtype=float)
 
-    epsilon = config.cross_fault_epsilon_cells * float(cell_spacing(config).min())
+    epsilon = config.cross_fault_offset_m
     plus = centers + epsilon * normals
     minus = centers - epsilon * normals
     valid = inside_extent(plus, config.extent) & inside_extent(minus, config.extent)
@@ -603,7 +616,7 @@ def prepare_cross_fault_pairs(
         config.fault_direction[young_idx],
     )
     young_distance = np.abs(implicit_distance(meshes[young_idx], centers))
-    valid &= young_distance >= config.boundary_exclusion_epsilon * epsilon
+    valid &= young_distance >= config.boundary_exclusion_m
 
     active = np.isclose(young_side, retained_side)
     rng = np.random.default_rng(20260727)
@@ -800,11 +813,10 @@ def main() -> None:
         rebuild=args.rebuild_faults,
     )
 
-    inferred_side, side_metadata = infer_retained_side(config, surface, meshes)
     retained_side = (
         args.retained_younger_side
         if args.retained_younger_side is not None
-        else inferred_side
+        else config.retained_younger_side
     )
     rules = (
         TemporalRule(
@@ -833,9 +845,16 @@ def main() -> None:
         "device": str(device),
         "quick_mode": bool(args.quick),
         "retained_younger_side": retained_side,
-        "retained_side_inference": side_metadata,
+        "retained_side_source": (
+            "command_line_override"
+            if args.retained_younger_side is not None
+            else "manuscript_default"
+        ),
+        "eikonal_sampling_protocol": (
+            "seed-specific uniform physical-domain points; fixed and shared across variants"
+        ),
         "terminal_holdout": holdout_metadata,
-        "cross_fault_epsilon_physical_units": float(pairs["epsilon"][0]),
+        "cross_fault_offset_m": float(pairs["epsilon"][0]),
         "torch_version": str(torch.__version__),
         "numpy_version": np.__version__,
         "pyvista_version": pv.__version__,
@@ -848,6 +867,14 @@ def main() -> None:
 
     all_rows: List[Dict[str, object]] = []
     for seed in config.seeds:
+        seed_dir = output_dir / f"seed_{seed}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        eikonal_raw = sample_eikonal_domain_raw(config, meshes, seed)
+        eikonal_file = seed_dir / "eikonal_domain_raw.npy"
+        np.save(eikonal_file, eikonal_raw)
+        eikonal_hash = hashlib.sha256(
+            np.ascontiguousarray(eikonal_raw).tobytes()
+        ).hexdigest()
         for variant in config.variants:
             print(f"\n=== seed={seed} variant={variant} ===")
             run_dir = output_dir / f"seed_{seed}" / variant
@@ -870,9 +897,18 @@ def main() -> None:
             holdout_interface = np.column_stack(
                 (holdout_interface_raw[:, 0], holdout_x)
             )
+            eikonal_variant, _ = transform_domain(
+                eikonal_raw, variant, config.fault_names, rules
+            )
+            eikonal_inputs = normalize_inputs(eikonal_variant, config.extent)
 
             model, history, best = train_stratigraphic_model(
-                config, interface, orientation_variant, seed, device
+                config,
+                interface,
+                orientation_variant,
+                seed,
+                eikonal_inputs,
+                device,
             )
             write_history(run_dir / "loss_history.csv", history)
             if args.save_checkpoints:
@@ -908,6 +944,8 @@ def main() -> None:
                 "variant": variant,
                 "input_dim": int(interface.shape[1] - 1),
                 "best_epoch": int(best["epoch"]),
+                "eikonal_samples_sha256": eikonal_hash,
+                "eikonal_samples_path": str(eikonal_file),
                 "best_total_loss": best["total_loss"],
                 "best_interface_loss": best["interface_loss"],
                 "best_orientation_loss": best["orientation_loss"],
