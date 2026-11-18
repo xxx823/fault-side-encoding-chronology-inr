@@ -1,11 +1,11 @@
 import pyvista as pv
 import numpy as np
-import pandas as pd
+
 
 
 class Fault_feature():
     """
-    Feature encoding for fault model
+    Build binary fault-side features from interpreted fault surfaces.
     """
 
     def domain_meshgrid(extents, resolution):
@@ -27,25 +27,17 @@ class Fault_feature():
     
     def feature_encoding_clip(fault_mesh, point_set, move, decimate, fault_direct='right'):
         """
-        the main function for feature encoding, use computer implicit distance to assign labels to the points, method comes from the pyvista
-        fault_mesh: the fault mesh to detemin which side the points belong to
-        point_set: the points to be labeled
-        move: the movement of the fault, 'up' or 'down'
-        decimate: the decimate value for the fault mesh, to reduce the number of points
-        fault_direct: the direction of the fault surface, 'right' or 'left'
+        Encode each point by its side of the interpreted fault surface. PyVista's signed implicit distance is used only to determine the side; its magnitude is not returned as a feature.
+        fault_mesh: the interpreted fault surface used to classify point sides
+        point_set: the query points to encode
+        move: the interpreted movement direction, either 'up' or 'down'
+        decimate: the mesh decimation fraction
+        fault_direct: the side convention, either 'right' or 'left'
         """
         decimated_mesh = fault_mesh.decimate_pro(decimate)  # if decimate=0.95, means only 5% of the points of the surface are kept
         point_set.compute_implicit_distance(decimated_mesh, inplace=True)
         implicit_distance = point_set.point_data['implicit_distance']
         # when fault_direct == 'right' and move == 'up', the points on right side are encoded as 1, the points on left side are encoded as 0
-        # if fault_direct == 'right':
-        #     flag = 1 if move == 'up' else 0
-        #     encoding_value = np.where(implicit_distance < 0, flag, 1-flag)
-        # else:
-        #     flag = 0 if move == 'up' else 1
-        #     encoding_value = np.where(implicit_distance < 0, flag, 1-flag)
-        #
-        # return encoding_value
 
         if fault_direct == 'right':
             flag = 1 if move == 'up' else 0
@@ -72,8 +64,8 @@ class Fault_feature():
         surface_points: the surface points, from original data (.csv file)
         orientation_points: the orientation points, from original data (.csv file)
         movement: the movement relate to the fault, 'up' or 'down'
-        decimate: the decimate value for the fault mesh, to reduce the number of points
-        fault_direct: the direction of the fault surface, 'right' or 'left'
+        decimate: the mesh decimation fraction
+        fault_direct: the side convention, either 'right' or 'left'
         """
         m = 0
         n = 0

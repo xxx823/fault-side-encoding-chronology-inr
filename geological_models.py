@@ -1,18 +1,16 @@
 import numpy as np
 import copy
-import utils
-import lossf
-from mlps import SimpleMLP, ConcatMLP
+import geological_utils
+import losses
+from networks import ConcatMLP
 import torch
 import time
-import torch.nn as nn
 
 def _safe_unit_np(v, eps=1e-12):
     n = np.linalg.norm(v)
     if n < eps:
         return v
     return v / n
-
 
 def _fault_eikonal_loss(model, points):
     """Return the unit-gradient penalty for normalized fault coordinates."""
@@ -74,14 +72,6 @@ def fault_normal_from_ori_vectors(select_arrow_vectors: np.ndarray, extent: list
     m2 = vn2.mean(axis=0)
     return _safe_unit_np(m2)
 
-
-
-
-
-
-
-
-
 def single_surface_ConcatMLP(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta=1, concat=False, epochs=2000, lr=0.001, device=torch.device("cpu")):
     """
@@ -109,13 +99,12 @@ def single_surface_ConcatMLP(interface_points, orientation_points, extent, resol
     select_arrow_points = orie[:,:3] 
     select_arrow_vectors = orie[:,3:]
     # normalize the data
-    normalized_inter_points = utils.normalize(interf, extent)
-    normalized_orien_points = utils.normalize(select_arrow_points, extent)
+    normalized_inter_points = geological_utils.normalize(interf, extent)
+    normalized_orien_points = geological_utils.normalize(select_arrow_points, extent)
     # extend the surface, the single surface is extended to three surfaces, the middle one is the original surface
-    points, labels = utils.extend_surface(normalized_inter_points)  # labels are the assigned scalar values of the three surface points
+    points, labels = geological_utils.extend_surface(normalized_inter_points)  # labels are the assigned scalar values of the three surface points
     points = np.vstack([points, normalized_orien_points])  # orientation points do not need to be extended to three surfaces
     # convert to torch tensor and send to GPU
-    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     mlp_x_tensor = torch.tensor(points, dtype=torch.float32).to(device).requires_grad_(True)
     mlp_y_tensor = torch.tensor(labels, dtype=torch.float32).to(device)
     mlp_dy_tensor = torch.tensor(select_arrow_vectors, dtype=torch.float32).to(device)
@@ -139,8 +128,8 @@ def single_surface_ConcatMLP(interface_points, orientation_points, extent, resol
     best_params = None
     for epoch in range(epochs):
         y_pred = model(mlp_x_tensor)
-        loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
-        loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
+        loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
+        loss_o = losses.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
         loss = loss_i + 0.1*loss_o     # the weight of the orientation loss is 0.1 is fixed, can set it as a hyperparameter for more flexibility      
         # Check if current loss is lower than minimum loss
         if loss_i < min_loss:
@@ -154,8 +143,8 @@ def single_surface_ConcatMLP(interface_points, orientation_points, extent, resol
         loss.backward()
         optimizer.step()             
     # query points
-    test_x = utils.query_points_exect_bounds(extent, resolution)
-    norm_text_x = utils.normalize(test_x, extent)
+    test_x = geological_utils.query_points_exect_bounds(extent, resolution)
+    norm_text_x = geological_utils.normalize(test_x, extent)
     test_x_tensor = torch.tensor(norm_text_x, dtype=torch.float32).to(device)
     best_model = ConcatMLP(in_dim=in_dim,
                             hidden_dim=hidden_dim,
@@ -169,12 +158,11 @@ def single_surface_ConcatMLP(interface_points, orientation_points, extent, resol
     with torch.no_grad():
         predictions = best_model(test_x_tensor).cpu().numpy()
     # convert to pyvista mesh
-    surface_mesh, grid_mesh_final = utils.predict_to_mesh_single_surface(extent, resolution, predictions)
+    surface_mesh, grid_mesh_final = geological_utils.predict_to_mesh_single_surface(extent, resolution, predictions)
     print(f'Finish modeling surface | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}')
     print('------Finish-------')
     
     return surface_mesh
-
 
 def unconformity_ConcatMLP_neighbor(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001, delta_orie=1, 
@@ -214,14 +202,13 @@ def unconformity_ConcatMLP_neighbor(interface_points, orientation_points, extent
         select_arrow_points = orie[:,:3] 
         select_arrow_vectors = orie[:,3:]
         # normalize the data
-        normalized_train_data_x = utils.normalize(interf, extent)
-        normalized_train_orie_x = utils.normalize(select_arrow_points, extent)
+        normalized_train_data_x = geological_utils.normalize(interf, extent)
+        normalized_train_orie_x = geological_utils.normalize(select_arrow_points, extent)
         # extend the surface, this step after normalization to make the surface extension canbe fixed in the same range
-        train_data_x, train_data_y = utils.extend_surface(normalized_train_data_x)
+        train_data_x, train_data_y = geological_utils.extend_surface(normalized_train_data_x)
         # the additional orientation points for calculating the orientation gradient
-        normalized_additional_orie_x6 = utils.delta_cal_orie(normalized_train_orie_x, resolution=resolution, delta=delta_orie)
+        normalized_additional_orie_x6 = geological_utils.delta_cal_orie(normalized_train_orie_x, resolution=resolution, delta=delta_orie)
          
-        #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         # concatenate the interface points and orientation points
         train_x_dx = np.vstack((train_data_x, normalized_additional_orie_x6))
         # convert to torch tensor and send to GPU
@@ -248,12 +235,11 @@ def unconformity_ConcatMLP_neighbor(interface_points, orientation_points, extent
         best_params = None
         for epoch in range(epochs):
             y_pred = model(x_dx_tensor)
-            loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], y_tensor)
+            loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], y_tensor)
             # calculate the orientation gradient loss
-            xyz_grad = utils.compute_gradient(y_pred[3*n_inter:,:], n_orien, resolution=resolution, delta=delta_orie)
-            loss_o = utils.calculate_grad_loss(xyz_grad[:,:], dy_tensor[:,:])
+            xyz_grad = geological_utils.compute_gradient(y_pred[3*n_inter:,:], n_orien, resolution=resolution, delta=delta_orie)
+            loss_o = geological_utils.calculate_grad_loss(xyz_grad[:,:], dy_tensor[:,:])
 
-            #loss = loss_i + 0.1*loss_o  # the weight of the orientation loss is 0.1 is fixed
             loss = loss_i + loss_o /(loss_o / loss_i).detach()    # scale the orientation loss to the same range as the interface loss  
             # Check if current loss is lower than minimum loss
             if loss_i < min_loss:
@@ -267,8 +253,8 @@ def unconformity_ConcatMLP_neighbor(interface_points, orientation_points, extent
             loss.backward()
             optimizer.step()             
         # query points
-        test_x = utils.query_points_exect_bounds(extent, resolution)
-        norm_text_x = utils.normalize(test_x, extent)
+        test_x = geological_utils.query_points_exect_bounds(extent, resolution)
+        norm_text_x = geological_utils.normalize(test_x, extent)
         test_x_tensor = torch.tensor(norm_text_x, dtype=torch.float32).to(device)
         best_model = ConcatMLP(in_dim=in_dim,
                               hidden_dim=hidden_dim,
@@ -282,14 +268,13 @@ def unconformity_ConcatMLP_neighbor(interface_points, orientation_points, extent
         with torch.no_grad():
             predictions = best_model(test_x_tensor).cpu().numpy()
         # convert to pyvista mesh
-        unconformity_mesh, grid_mesh_final = utils.predict_to_mesh_single_surface(extent, resolution, predictions)
+        unconformity_mesh, grid_mesh_final = geological_utils.predict_to_mesh_single_surface(extent, resolution, predictions)
         print(f'Finish modeling {name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}')
         predic_list.append(unconformity_mesh)
         n += 1
     print('------Finish-------')
     # output the grid_mesh_final for further visualization, note that the grid_mesh_final only the last one, do not store all the grid_mesh_final
     return predic_list, grid_mesh_final
-
 
 def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001, device=torch.device("cpu")):
@@ -327,13 +312,12 @@ def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolut
         select_arrow_points = orie[:,:3] 
         select_arrow_vectors = orie[:,3:]
         # normalize the data
-        normalized_inter_points = utils.normalize(interf, extent)
-        normalized_orien_points = utils.normalize(select_arrow_points, extent)
+        normalized_inter_points = geological_utils.normalize(interf, extent)
+        normalized_orien_points = geological_utils.normalize(select_arrow_points, extent)
         # extend the surface, the single surface is extended to three surfaces, the middle one is the original surface
-        points, labels = utils.extend_surface(normalized_inter_points)
+        points, labels = geological_utils.extend_surface(normalized_inter_points)
         points = np.vstack([points, normalized_orien_points]) 
         # convert to torch tensor and send to GPU
-        #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         mlp_x_tensor = torch.tensor(points, dtype=torch.float32).to(device).requires_grad_(True)
         mlp_y_tensor = torch.tensor(labels, dtype=torch.float32).to(device)
         mlp_dy_tensor = torch.tensor(select_arrow_vectors, dtype=torch.float32).to(device)
@@ -356,10 +340,9 @@ def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolut
         best_params = None
         for epoch in range(epochs):
             y_pred = model(mlp_x_tensor)
-            loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)  #3*n_inter is the number of interface points after extending
-            loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
+            loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)  #3*n_inter is the number of interface points after extending
+            loss_o = losses.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
             loss = loss_i + 0.1*loss_o  # the weight of the orientation loss is 0.1 is fixed
-            #loss = loss_i + loss_o /(loss_o / loss_i).detach()        
             # Check if current loss is lower than minimum loss
             if loss_i < min_loss:
                 min_loss = loss_i
@@ -372,8 +355,8 @@ def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolut
             loss.backward()
             optimizer.step()             
         # query points
-        test_x = utils.query_points_exect_bounds(extent, resolution)
-        norm_text_x = utils.normalize(test_x, extent)
+        test_x = geological_utils.query_points_exect_bounds(extent, resolution)
+        norm_text_x = geological_utils.normalize(test_x, extent)
         test_x_tensor = torch.tensor(norm_text_x, dtype=torch.float32).to(device)
         best_model = ConcatMLP(in_dim=in_dim,
                               hidden_dim=hidden_dim,
@@ -387,14 +370,13 @@ def unconformity_ConcatMLP(interface_points, orientation_points, extent, resolut
         with torch.no_grad():
             predictions = best_model(test_x_tensor).cpu().numpy()
         # convert to pyvista mesh
-        unconformity_mesh, grid_mesh_final = utils.predict_to_mesh_single_surface(extent, resolution, predictions)
+        unconformity_mesh, grid_mesh_final = geological_utils.predict_to_mesh_single_surface(extent, resolution, predictions)
         print(f'Finish modeling {name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}')
         predic_list.append(unconformity_mesh)
         n += 1
     print('------Finish-------')
     # output the grid_mesh_final for further visualization, note that the grid_mesh_final only the last one, do not store all the grid_mesh_final
     return predic_list, grid_mesh_final
-
 
 def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001,
@@ -447,32 +429,15 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
             below_orien = unit_orien[unit_orien['ref_'+fault_name] == 'below'][['X', 'Y', 'Z']].values
             above = np.concatenate((above_point, above_orien), axis=0)
             below = np.concatenate((below_point, below_orien), axis=0)
-            # # normalize the data
-            # normalized_inter_points = utils.normalize(interf, extent)
-            # normalized_orien_points = utils.normalize(select_arrow_points, extent)
-            # normalized_above_points = utils.normalize(above, extent)
-            # normalized_below_points = utils.normalize(below, extent)
-            # # extend the surface, the single surface is extended to three surfaces, the middle one is the original surface
-            # points, labels = utils.extend_surface(normalized_inter_points)
-            # points = np.vstack([points, normalized_above_points, normalized_below_points, normalized_orien_points])
-            # # convert to torch tensor and send to GPU
-            # #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-            # mlp_x_tensor = torch.tensor(points, dtype=torch.float32).to(device).requires_grad_(True)
-            # mlp_y_tensor = torch.tensor(labels, dtype=torch.float32).to(device)
-            # mlp_dy_tensor = torch.tensor(select_arrow_vectors, dtype=torch.float32).to(device)
+            # points, labels = geological_utils.extend_surface(normalized_inter_points)
             # # the number of interface points, orientation points, above and below for dividing the input tensor to send to loss functions
-            # n_inter = normalized_inter_points.shape[0]
-            # n_orien = normalized_orien_points.shape[0]
-            # n_above = normalized_above_points.shape[0]
-            # n_below = normalized_below_points.shape[0]
             # # the unit direction vectors of the orientation points, used in the loss function as the true orientation
-            # direction_vectors_unit = mlp_dy_tensor / torch.norm(mlp_dy_tensor, dim=1, keepdim=True)
 
             # normalize the data
-            normalized_inter_points = utils.normalize(interf, extent)
-            normalized_orien_points = utils.normalize(select_arrow_points, extent)
-            normalized_above_points = utils.normalize(above, extent)
-            normalized_below_points = utils.normalize(below, extent)
+            normalized_inter_points = geological_utils.normalize(interf, extent)
+            normalized_orien_points = geological_utils.normalize(select_arrow_points, extent)
+            normalized_above_points = geological_utils.normalize(above, extent)
+            normalized_below_points = geological_utils.normalize(below, extent)
 
             # Build three fault-side training layers along the normalized fault normal.
             n_fault = fault_normal_from_ori_vectors(select_arrow_vectors, extent)
@@ -521,17 +486,16 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
             best_params = None
             for epoch in range(epochs):
                 y_pred = model(mlp_x_tensor)
-                loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
-                loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
-                loss_a = lossf.loss_above(y_pred, n_inter, n_above, device)
-                loss_b = lossf.loss_below(y_pred, n_inter, n_above, n_below, device)
+                loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
+                loss_o = losses.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
+                loss_a = losses.loss_above(y_pred, n_inter, n_above, device)
+                loss_b = losses.loss_below(y_pred, n_inter, n_above, n_below, device)
                 if fault_eikonal_points is None:
                     loss_e = torch.zeros((), dtype=loss_i.dtype, device=device)
                 else:
                     fault_eikonal_points.grad = None
                     loss_e = _fault_eikonal_loss(model, fault_eikonal_points)
                 loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b + eikonal_weight*loss_e
-                #loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b         
                 # Check if current loss is lower than minimum loss
                 if loss.item() < min_loss:
                     min_loss = loss.item()
@@ -546,8 +510,8 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                 loss.backward()
                 optimizer.step()             
             # query points
-            test_x = utils.query_points(extent, resolution)
-            norm_text_x = utils.normalize(test_x, extent)
+            test_x = geological_utils.query_points(extent, resolution)
+            norm_text_x = geological_utils.normalize(test_x, extent)
             test_x_tensor = torch.tensor(norm_text_x, dtype=torch.float32).to(device)
             best_model = ConcatMLP(in_dim=in_dim,
                               hidden_dim=hidden_dim,
@@ -561,7 +525,7 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
             with torch.no_grad():
                 predictions = best_model(test_x_tensor).cpu().numpy()
             # convert to pyvista mesh
-            fault_mesh = utils.predict_to_mesh_fault(extent, resolution, predictions)
+            fault_mesh = geological_utils.predict_to_mesh_fault(extent, resolution, predictions)
             print(f'Finish modeling {fault_name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}, Loss_ab:{min_loss_ab.item()}, Loss_e:{min_loss_e.item()}')
             mesh.append(fault_mesh)
             n += 1
@@ -576,25 +540,12 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
             orie = fault_orien[['X','Y','Z','dx','dy','dz']].values
             select_arrow_points = orie[:,:3] 
             select_arrow_vectors = orie[:,3:]
-            # # normalize the data
-            # normalized_inter_points = utils.normalize(interf, extent)
-            # normalized_orien_points = utils.normalize(select_arrow_points, extent)
-            # # extend the surface
-            # points, labels = utils.extend_surface(normalized_inter_points)
-            # points = np.vstack([points, normalized_orien_points])
-            # # convert to torch tensor and send to GPU
-            # #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-            # mlp_x_tensor = torch.tensor(points, dtype=torch.float32).to(device).requires_grad_(True)
-            # mlp_y_tensor = torch.tensor(labels, dtype=torch.float32).to(device)
-            # mlp_dy_tensor = torch.tensor(select_arrow_vectors, dtype=torch.float32).to(device)
+            # points, labels = geological_utils.extend_surface(normalized_inter_points)
             #
-            # n_inter = normalized_inter_points.shape[0]
-            # n_orien = normalized_orien_points.shape[0]
-            # direction_vectors_unit = mlp_dy_tensor / torch.norm(mlp_dy_tensor, dim=1, keepdim=True)
 
             # normalize the data
-            normalized_inter_points = utils.normalize(interf, extent)
-            normalized_orien_points = utils.normalize(select_arrow_points, extent)
+            normalized_inter_points = geological_utils.normalize(interf, extent)
+            normalized_orien_points = geological_utils.normalize(select_arrow_points, extent)
 
             # Build three fault-side training layers along the normalized fault normal.
             # Estimate the global normal from the orientation vectors.
@@ -646,8 +597,8 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
             best_params = None
             for epoch in range(epochs):
                 y_pred = model(mlp_x_tensor)
-                loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
-                loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
+                loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
+                loss_o = losses.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
                 if fault_eikonal_points is None:
                     loss_e = torch.zeros((), dtype=loss_i.dtype, device=device)
                 else:
@@ -677,8 +628,8 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
                 loss.backward()
                 optimizer.step()             
             # query points
-            test_x = utils.query_points(extent, resolution)
-            norm_text_x = utils.normalize(test_x, extent)
+            test_x = geological_utils.query_points(extent, resolution)
+            norm_text_x = geological_utils.normalize(test_x, extent)
             test_x_tensor = torch.tensor(norm_text_x, dtype=torch.float32).to(device)
             best_model = ConcatMLP(in_dim=in_dim,
                               hidden_dim=hidden_dim,
@@ -692,14 +643,13 @@ def fault_ConcatMLP(interface_points, orientation_points, extent, resolution, in
             with torch.no_grad():
                 predictions = best_model(test_x_tensor).cpu().numpy()
             # convert to pyvista mesh
-            fault_mesh = utils.predict_to_mesh_fault(extent, resolution, predictions)
+            fault_mesh = geological_utils.predict_to_mesh_fault(extent, resolution, predictions)
             print(f'Finish modeling {fault_name} | Loss_i: {min_loss_i.item()}, Loss_o: {min_loss_o.item()}, Loss_e:{min_loss_e.item()}')
             mesh.append(fault_mesh)
             n += 1
         print('------Finish-------')
     
     return mesh
-
 
 def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta_list=[], concat=False, epochs=2000, lr=0.001, above_below=False, 
@@ -727,10 +677,9 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
     # read the data
     fault_surf_point = interface_points[interface_points['type'] == 'fault']
     fault_orie_point = orientation_points[orientation_points['type'] == 'fault']
-    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # query points
-    test_x = utils.query_points(extent, resolution)
-    norm_text_x = utils.normalize(test_x, extent)
+    test_x = geological_utils.query_points(extent, resolution)
+    norm_text_x = geological_utils.normalize(test_x, extent)
     test_x_tensor = torch.tensor(norm_text_x, dtype=torch.float32).to(device)
     mesh = []
     features = []
@@ -760,15 +709,14 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
             above = np.concatenate((above_point, above_orien), axis=0)
             below = np.concatenate((below_point, below_orien), axis=0)
             # normalize the data
-            normalized_inter_points = utils.normalize(interf, extent)
-            normalized_orien_points = utils.normalize(select_arrow_points, extent)
-            normalized_above_points = utils.normalize(above, extent)
-            normalized_below_points = utils.normalize(below, extent)
+            normalized_inter_points = geological_utils.normalize(interf, extent)
+            normalized_orien_points = geological_utils.normalize(select_arrow_points, extent)
+            normalized_above_points = geological_utils.normalize(above, extent)
+            normalized_below_points = geological_utils.normalize(below, extent)
             # extend the surface, the single surface is extended to three surfaces, the middle one is the original surface
-            points, labels = utils.extend_surface(normalized_inter_points)
+            points, labels = geological_utils.extend_surface(normalized_inter_points)
             points = np.vstack([points, normalized_above_points, normalized_below_points, normalized_orien_points])
             # convert to torch tensor and send to GPU
-            #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
             mlp_x_tensor = torch.tensor(points, dtype=torch.float32).to(device).requires_grad_(True)
             mlp_y_tensor = torch.tensor(labels, dtype=torch.float32).to(device)
             mlp_dy_tensor = torch.tensor(select_arrow_vectors, dtype=torch.float32).to(device)
@@ -794,12 +742,11 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
             best_params = None
             for epoch in range(epochs):
                 y_pred = model(mlp_x_tensor)
-                loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
-                loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
-                loss_a = lossf.loss_above(y_pred, n_inter, n_above, device)
-                loss_b = lossf.loss_below(y_pred, n_inter, n_above, n_below, device)
+                loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
+                loss_o = losses.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
+                loss_a = losses.loss_above(y_pred, n_inter, n_above, device)
+                loss_b = losses.loss_below(y_pred, n_inter, n_above, n_below, device)
                 loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b    
-                #loss = loss_i + 0.1*loss_o + 0.1*loss_a + 0.1*loss_b         
                 # Check if current loss is lower than minimum loss
                 if loss_i < min_loss:
                     min_loss = loss_i
@@ -824,7 +771,7 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
             with torch.no_grad():
                 predictions = best_model(test_x_tensor).cpu().numpy()
             # convert to pyvista mesh
-            fault_mesh = utils.predict_to_mesh_fault(extent, resolution, predictions)
+            fault_mesh = geological_utils.predict_to_mesh_fault(extent, resolution, predictions)
             # assign the fault features
             if fault_direction == 'right':
                 flag = 1 if move_trend == 'up' else 0
@@ -850,13 +797,12 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
             select_arrow_points = orie[:,:3] 
             select_arrow_vectors = orie[:,3:]
             # normalize the data
-            normalized_inter_points = utils.normalize(interf, extent)
-            normalized_orien_points = utils.normalize(select_arrow_points, extent)
+            normalized_inter_points = geological_utils.normalize(interf, extent)
+            normalized_orien_points = geological_utils.normalize(select_arrow_points, extent)
             # extend the surface
-            points, labels = utils.extend_surface(normalized_inter_points)
+            points, labels = geological_utils.extend_surface(normalized_inter_points)
             points = np.vstack([points, normalized_orien_points])
             # convert to torch tensor and send to GPU
-            #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
             mlp_x_tensor = torch.tensor(points, dtype=torch.float32).to(device).requires_grad_(True)
             mlp_y_tensor = torch.tensor(labels, dtype=torch.float32).to(device)
             mlp_dy_tensor = torch.tensor(select_arrow_vectors, dtype=torch.float32).to(device)
@@ -879,8 +825,8 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
             best_params = None
             for epoch in range(epochs):
                 y_pred = model(mlp_x_tensor)
-                loss_i = lossf.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
-                loss_o = lossf.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
+                loss_i = losses.loss_intf(y_pred.squeeze()[:3*n_inter], mlp_y_tensor)
+                loss_o = losses.loss_grad(mlp_x_tensor, y_pred, direction_vectors_unit, n_orien)
                 loss = loss_i + 0.1*loss_o           
                 # Check if current loss is lower than minimum loss
                 if loss_i < min_loss:
@@ -905,7 +851,7 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
             with torch.no_grad():
                 predictions = best_model(test_x_tensor).cpu().numpy()
             # convert to pyvista mesh
-            fault_mesh = utils.predict_to_mesh_fault(extent, resolution, predictions)
+            fault_mesh = geological_utils.predict_to_mesh_fault(extent, resolution, predictions)
             # assign the fault features
             if fault_direction == 'right':
                 flag = 1 if move_trend == 'up' else 0
@@ -920,7 +866,6 @@ def fault_ConcatMLP_with_encoding(interface_points, orientation_points, extent, 
         print('------Finish-------')
     
     return mesh, features
-
 
 def stratigraphic_ConcatMLP_neighbor(interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta=1, concat=False, epochs=2000, lr=0.001, delta_orie=1, alpha=0.1, 
@@ -952,13 +897,12 @@ def stratigraphic_ConcatMLP_neighbor(interface_data, orientation_data, meshgrid_
     train_orie_x = np.delete(orientation_data.copy(), [3,4,5], axis=1).astype(np.float64)
     train_orie_y = orientation_data[:,3:6].astype(np.float64)
     # normalize the data
-    normalized_train_data_x = utils.normalize(train_data_x, extent)
-    normalized_train_orie_x = utils.normalize(train_orie_x, extent)
-    normalized_meshgrid_data = utils.normalize(meshgrid_data, extent)
+    normalized_train_data_x = geological_utils.normalize(train_data_x, extent)
+    normalized_train_orie_x = geological_utils.normalize(train_orie_x, extent)
+    normalized_meshgrid_data = geological_utils.normalize(meshgrid_data, extent)
     # key step: the additional orientation points for calculating the orientation gradient should with the same fault feature as orientation points
-    normalized_additional_orie_x6 = utils.delta_cal_orie(normalized_train_orie_x, resolution=resolution, delta=delta_orie)
+    normalized_additional_orie_x6 = geological_utils.delta_cal_orie(normalized_train_orie_x, resolution=resolution, delta=delta_orie)
 
-    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # concatenate the interface points and orientation points for training
     train_x_dx = np.vstack((normalized_train_data_x, normalized_additional_orie_x6))
     # convert to torch tensor and send to GPU
@@ -987,10 +931,10 @@ def stratigraphic_ConcatMLP_neighbor(interface_data, orientation_data, meshgrid_
     for epoch in range(epochs):
         y_pred = model(x_dx_tensor)  
         # calculate the interface loss
-        loss_i = lossf.loss_intf(y_pred[:n_intf,:].squeeze(), y_tensor)
+        loss_i = losses.loss_intf(y_pred[:n_intf,:].squeeze(), y_tensor)
         # calculate the orientation gradient loss
-        xyz_grad = utils.compute_gradient(y_pred[n_intf:,:], n_orie, resolution=resolution, delta=delta_orie)
-        loss_o = utils.calculate_grad_loss(xyz_grad[:,:], dy_tensor[:,:])
+        xyz_grad = geological_utils.compute_gradient(y_pred[n_intf:,:], n_orie, resolution=resolution, delta=delta_orie)
+        loss_o = geological_utils.calculate_grad_loss(xyz_grad[:,:], dy_tensor[:,:])
         loss = loss_i + alpha * loss_o
         if loss < min_loss:
             min_loss = loss
@@ -1024,12 +968,11 @@ def stratigraphic_ConcatMLP_neighbor(interface_data, orientation_data, meshgrid_
     # convert to pyvista mesh
     # get the iso values for extracting the stratigraphic surfaces
     iso_values = np.unique(interface_data[:, 0])
-    stratigraphic_mesh, grid_mesh_final = utils.predict_to_mesh_stratigraphic(extent, resolution, predictions, iso_values)
+    stratigraphic_mesh, grid_mesh_final = geological_utils.predict_to_mesh_stratigraphic(extent, resolution, predictions, iso_values)
     print(f'Inference time: {t2_inference - t1_inference} seconds')
     print('------Finish-------')
     
     return stratigraphic_mesh, grid_mesh_final
-
 
 def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, extent, resolution, in_dim, hidden_dim, out_dim,
                     n_hidden_layers, activation='Softplus', beta=1, concat=False, epochs=2000, lr=0.001, alpha=0.1,
@@ -1061,13 +1004,11 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     train_orie_x = np.delete(orientation_data.copy(), [3,4,5], axis=1).astype(np.float64)
     train_orie_y = orientation_data[:,3:6].astype(np.float64)
     # normalize the data
-    normalized_train_data_x = utils.normalize(train_data_x, extent)
-    normalized_train_orie_x = utils.normalize(train_orie_x, extent)
-    normalized_meshgrid_data = utils.normalize(meshgrid_data, extent)
+    normalized_train_data_x = geological_utils.normalize(train_data_x, extent)
+    normalized_train_orie_x = geological_utils.normalize(train_orie_x, extent)
+    normalized_meshgrid_data = geological_utils.normalize(meshgrid_data, extent)
     # key step: the additional orientation points for calculating the orientation gradient should with the same fault feature as orientation points
-    #normalized_additional_orie_x6 = utils.delta_cal_orie(normalized_train_orie_x, resolution=resolution, delta=delta_orie)
 
-    #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     # concatenate the interface points and orientation points for training
     train_x_dx = np.vstack((normalized_train_data_x, normalized_train_orie_x))
     # convert to torch tensor and send to GPU
@@ -1096,13 +1037,9 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     for epoch in range(epochs):
         y_pred = model(x_dx_tensor)  
         # calculate the interface loss
-        loss_i = lossf.loss_intf_mean(y_pred[:n_intf,:].squeeze(), y_tensor)
-        """ criterion = nn.MSELoss(reduction='sum')
-        loss_i = criterion(y_pred[:n_intf,:].squeeze(), y_tensor) """
+        loss_i = losses.loss_intf_mean(y_pred[:n_intf,:].squeeze(), y_tensor)
         # calculate the orientation gradient loss
-        #xyz_grad = utils.compute_gradient(y_pred[n_intf:,:], n_orie, resolution=resolution, delta=delta_orie)
-        #loss_o = utils.calculate_grad_loss(xyz_grad[:,:], dy_tensor[:,:])
-        loss_o = lossf.loss_grad_with_fault_features(x_dx_tensor, y_pred, dy_tensor, n_orie)
+        loss_o = losses.loss_grad_with_fault_features(x_dx_tensor, y_pred, dy_tensor, n_orie)
         loss = loss_i + alpha * loss_o
         if logger is not None:
             logger.log(
@@ -1149,7 +1086,7 @@ def stratigraphic_ConcatMLP(interface_data, orientation_data, meshgrid_data, ext
     # convert to pyvista mesh
     # get the iso values for extracting the stratigraphic surfaces
     iso_values = np.unique(interface_data[:, 0])
-    stratigraphic_mesh, grid_mesh_final = utils.predict_to_mesh_stratigraphic(extent, resolution, predictions, iso_values)
+    stratigraphic_mesh, grid_mesh_final = geological_utils.predict_to_mesh_stratigraphic(extent, resolution, predictions, iso_values)
     print(f'Inference time: {t2_inference - t1_inference} seconds')
     print('------Finish-------')
     

@@ -61,7 +61,6 @@ def loss_grad(train_x, y_pred, y_true, n_orien):
     grad_norm_pred = torch.norm(gradients[-n_orien:,:], p=2, dim=1)
     grad_inner_product = torch.einsum('ij, ij->i', y_true, gradients[-n_orien:,:])
     cosine = grad_inner_product / grad_norm_pred  # orie_tensor using normal orientation
-    #loss_grad = torch.sum(1 - cosine)
     loss_grad = torch.mean(1 - cosine)
 
     return loss_grad

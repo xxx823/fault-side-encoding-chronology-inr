@@ -1,4 +1,4 @@
-import pandas as pd
+
 import numpy as np
 import pyvista as pv
 import torch
@@ -60,21 +60,6 @@ def query_points(bounds, resolution):
 
     return test_x
 
-def domain_meshgrid(extents, resolution):
-        """
-        a defined grid mesh for the model domain
-        extents: the extent of the model domain
-        resolution: the resolution of the model
-        """
-        grid_mesh_final = pv.ImageData()
-        grid_mesh_final.dimensions = resolution
-        grid_mesh_final.origin = [extents[0], extents[2], extents[4]]
-        grid_mesh_final.spacing = [(extents[1]-extents[0])/(resolution[0]-1), (extents[3]-extents[2])/(resolution[1]-1), 
-                                (extents[5]-extents[4])/(resolution[2]-1)]
-
-        return grid_mesh_final
-
-
 def query_points_exect_bounds(bounds, resolution):
     """
     Generate meshgrid points for the model, which is used to inference the domain
@@ -93,7 +78,7 @@ def query_points_exect_bounds(bounds, resolution):
 
 def domain_meshgrid(extents, resolution):
     """
-    define the meshgrid points for the model domain, this function used in 'feature_encoding.clip_surface'
+    define the meshgrid points for the model domain, this function used in 'feature_encoding.fault_side_encoding'
     extents: the extent of the model domain
     resolution: the resolution of the model
     """

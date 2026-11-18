@@ -33,11 +33,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import lossf  # noqa: E402
-import models  # noqa: E402
-import utils  # noqa: E402
-from feature_ecoding.clip_surface import Fault_feature  # noqa: E402
-from mlps import ConcatMLP  # noqa: E402
+import losses  # noqa: E402
+import geological_models  # noqa: E402
+import geological_utils  # noqa: E402
+from feature_encoding.fault_side_encoding import Fault_feature  # noqa: E402
+from networks import ConcatMLP  # noqa: E402
 
 from ablation.feature_variants import (  # noqa: E402
     VALID_VARIANTS,
@@ -219,7 +219,7 @@ def train_or_load_faults(
 
     print("Training fixed fault geometry (performed once for all ablation groups)")
     set_seed(0)
-    meshes = models.fault_ConcatMLP(
+    meshes = geological_models.fault_ConcatMLP(
         surface,
         orientation,
         list(config.extent),
@@ -419,9 +419,9 @@ def choose_terminal_holdout(
 
 
 def normalize_inputs(values: np.ndarray, extent: Sequence[float]) -> np.ndarray:
-    # utils.normalize intentionally normalizes only the xyz columns and leaves
+    # geological_utils.normalize intentionally normalizes only the xyz columns and leaves
     # fault encodings unchanged, which is exactly the required behavior.
-    return utils.normalize(np.asarray(values).copy(), list(extent))
+    return geological_utils.normalize(np.asarray(values).copy(), list(extent))
 
 
 def train_stratigraphic_model(
@@ -476,10 +476,10 @@ def train_stratigraphic_model(
         optimizer.zero_grad(set_to_none=True)
         x_tensor.grad = None
         prediction = model(x_tensor)
-        interface_loss = lossf.loss_intf_mean(
+        interface_loss = losses.loss_intf_mean(
             prediction[:n_interface].squeeze(), y_tensor
         )
-        orientation_loss = lossf.loss_grad_with_fault_features(
+        orientation_loss = losses.loss_grad_with_fault_features(
             x_tensor, prediction, dy_tensor, n_orientation
         )
         loss = interface_loss + config.orientation_weight * orientation_loss

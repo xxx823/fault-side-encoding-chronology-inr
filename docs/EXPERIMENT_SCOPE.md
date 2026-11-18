@@ -7,7 +7,7 @@ or the full R1C engineering runner.
 ## R1B controlled experiment
 
 The paper's controlled two-fault results are the frozen 20-run R1B results in
-[`paper_results/r1b`](../paper_results/r1b/README.md), not the earlier
+[`paper_results/r1b`](../paper_results/r1b/RESULTS_AND_PROVENANCE.md), not the earlier
 `case5_paper_config_*` summaries found in the working project. The frozen
 values are reported with five-seed mean and sample standard deviation.
 
@@ -59,7 +59,14 @@ repository. The D-drive `case5_paper_config_exact`, `case5_paper_config_full`,
 and `case5_formal_gpu` output directories are historical runs with different
 inputs or configurations; they are not substituted for the R1B/R1C evidence.
 
-The old `ablation/case_paper_parameters.py` entry point is retained for
-historical comparison only. It reconstructs fault meshes and does not use the
-corrected physical-space orientation-gradient computation in the frozen R1B
-protocol. The R1B README and runner identify it as legacy.
+The historical paper-parameter runner is excluded from the public repository because it does not implement the frozen R1B protocol. The R1B runner and results record identify the configuration used for the controlled experiment.
+
+## Manuscript settings requiring reconciliation
+
+The frozen public R1B protocol and the supplied manuscript are not fully aligned:
+
+- The public R1B environment is Python 3.11.17, PyTorch 2.12.1+cu130, CUDA 13.0, and an NVIDIA RTX 5060 Laptop GPU. The manuscript reports Python 3.12, PyTorch 2.6.0, CUDA 12.8, and an RTX 5060 Ti. These describe different environments.
+- The R1B stratigraphic network settings are 2 hidden layers × 256 units, Softplus β = 1, 1000 epochs, learning rate 0.001, orientation weight 0.1, and normalized-coordinate Eikonal weight 0.01 with 4096 fixed points.
+- R1B uses the two supplied raw fault meshes as fixed geometry and performs zero fault-network trainings. The manuscript fault-stage training settings must not be attributed to the frozen R1B results.
+- The manuscript Table 2 values and invalid-region pair count differ from the frozen R1B table. Use `paper_results/r1b/metrics_summary.csv` and `metrics_all_runs.csv` as the public result source.
+- The public repository does not contain the private four-fault engineering data or code. Engineering claims and tables cannot be reproduced from this repository.

@@ -33,25 +33,32 @@ The main steps are:
 ```text
 fault-side-encoding-chronology-inr/
 |-- ablation/
-|   |-- r1b_experiment.py          # Current controlled ablation runner
-|   |-- r1b_core.py                # Masking and loss-related utilities
-|   |-- r1b_bundle.py              # Input integrity checks and run safeguards
-|   `-- case_paper_parameters.py   # Legacy runner (historical reference)
-|-- data/
-|   `-- case1/
-|       |-- surface.csv
-|       |-- orientation.csv
-|       `-- fault_meshes/
-|           |-- fault1_raw.vtp
-|           `-- fault2_raw.vtp
-|-- feature_ecoding/              # Fault-feature encoding utilities
-|-- lossf.py
-|-- mlps.py
-|-- models.py
-|-- utils.py
-|-- requirements-paper.txt
-|-- images/
-|   `-- workflow.png              # Figure displayed above
+|   |-- case_ablation.py
+|   |-- feature_variants.py
+|   |-- r1b_bundle.py
+|   |-- r1b_core.py
+|   `-- r1b_experiment.py
+|-- data/case1/
+|   |-- surface.csv
+|   |-- orientation.csv
+|   `-- fault_meshes/
+|       |-- fault1_raw.vtp
+|       `-- fault2_raw.vtp
+|-- feature_encoding/
+|   `-- fault_side_encoding.py
+|-- losses.py
+|-- networks.py
+|-- geological_models.py
+|-- geological_utils.py
+|-- requirements.txt
+|-- docs/EXPERIMENT_SCOPE.md
+|-- paper_results/r1b/
+|   |-- RESULTS_AND_PROVENANCE.md
+|   |-- REPRODUCTION_CHECK.md
+|   |-- metrics_all_runs.csv
+|   `-- metrics_summary.csv
+|-- tests/
+|-- images/workflow.png
 |-- LICENSE
 `-- README.md
 ```
@@ -60,7 +67,7 @@ Only the most relevant files are shown above. Some existing modules and scripts 
 
 ## Software environment
 
-The frozen R1B runs used Python 3.11.17, PyTorch 2.12.1+cu130, CUDA 13.0, and an NVIDIA GeForce RTX 5060 Laptop GPU. The repository pins the following Python packages in `requirements-paper.txt`:
+The frozen R1B runs used Python 3.11.17, PyTorch 2.12.1+cu130, CUDA 13.0, and an NVIDIA GeForce RTX 5060 Laptop GPU. The repository pins the following Python packages in `requirements.txt`:
 
 - `torch==2.12.1`
 - `numpy==1.26.4`
@@ -72,14 +79,14 @@ The frozen R1B runs used Python 3.11.17, PyTorch 2.12.1+cu130, CUDA 13.0, and an
 From the repository root, install the dependencies:
 
 ```bash
-python -m pip install -r requirements-paper.txt
+python -m pip install -r requirements.txt
 ```
 
 For GPU execution, ensure that the installed PyTorch build supports the local CUDA-capable GPU. Different PyTorch/CUDA installations and hardware may lead to different runtimes or small numerical differences.
 
 ## Reproducing the controlled ablation
 
-The **current** controlled experiment entry point is `ablation.r1b_experiment`. The older `ablation/case_paper_parameters.py` script is retained for historical reference and is not the recommended entry point for the corrected R1B experiment.
+The controlled experiment entry point is `ablation.r1b_experiment`. It uses the frozen raw fault meshes as fixed inputs and trains the stratigraphic network only; the historical paper-parameter runner is excluded from the public code path.
 
 ### 1. Check the provided inputs (no training)
 
@@ -126,9 +133,9 @@ The controlled experiment produces per-run artifacts such as:
 
 The output root also contains experiment configuration, integrity/geometry diagnostics, aggregate metrics, figures, and a numerical comparison report (for example, `numeric_comparison.md` and `decision.json`).
 
-## Results reported in the manuscript
+## Frozen R1B results
 
-The controlled truncated-fault ablation compares the magnitude of the scalar jump inside the active fault domain, the residual response beyond the termination, and the near-termination interface RMSE. Values below are **mean +/- sample standard deviation across five random seeds**, as reported in the manuscript:
+The controlled truncated-fault ablation compares the magnitude of the scalar jump inside the active fault domain, the residual response beyond the termination, and the near-termination interface RMSE. Values below are **mean +/- sample standard deviation across five random seeds**, from the frozen R1B experiment:
 
 | Configuration | Valid-region scalar difference | Invalid-region residual | Interface RMSE (m) |
 | --- | ---: | ---: | ---: |
@@ -139,7 +146,7 @@ The controlled truncated-fault ablation compares the magnitude of the scalar jum
 
 Across the five seeds, valid-domain gating reduced the invalid-region response relative to global fault-side encoding by a median of **99.36%**, while preserving a cross-fault response in the valid region.
 
-These values are the frozen R1B summary in [`metrics_summary.csv`](paper_results/r1b/metrics_summary.csv); individual seed results are available in [`metrics_all_runs.csv`](paper_results/r1b/metrics_all_runs.csv).
+These values are the frozen R1B summary in [`metrics_summary.csv`](paper_results/r1b/metrics_summary.csv); individual seed results are available in [`metrics_all_runs.csv`](paper_results/r1b/metrics_all_runs.csv). Detailed provenance and reproduction notes are in [`RESULTS_AND_PROVENANCE.md`](paper_results/r1b/RESULTS_AND_PROVENANCE.md), [`REPRODUCTION_CHECK.md`](paper_results/r1b/REPRODUCTION_CHECK.md), and [`EXPERIMENT_SCOPE.md`](docs/EXPERIMENT_SCOPE.md).
 
 ## Data availability and scope
 

@@ -57,7 +57,7 @@ Frozen environment: Python 3.11.17, PyTorch 2.12.1+cu130, CUDA 13.0, NVIDIA
 GeForce RTX 5060 Laptop GPU, NumPy 1.26.4, pandas 2.2.3, PyVista 0.46.4,
 Matplotlib 3.11.2, VTK 9.5.2.
 
-Historical source hashes recorded for the frozen results:
+Historical source hashes recorded for the frozen results (the filenames below are those used by the original R1B run):
 
 ```text
 case_ablation.py   071E3FC41C5F14E0119836611605D8D28352BE1C49F085A8CB9A9C6878BBA768
@@ -68,6 +68,8 @@ utils.py           222F34884377C40BE4AEC4E7CD6AFD1B865E582F6CD3384DC06025F6DEFD6
 r1b_core.py        5CA8947F166D259526B08AD66E7F39EAD15547526477A1565E615BB92362BEA5
 r1b_experiment.py  A96F4747E403350B5FE77E65C194348914836A3C4D40B989759325EC9E3E29C6
 ```
+
+The public cleanup renamed generic modules for clarity: `mlps.py` is now `networks.py`, `lossf.py` is now `losses.py`, `utils.py` is now `geological_utils.py`, and `models.py` is now `geological_models.py`. The historical hashes above retain the original filenames; they identify the original experiment snapshot, not the renamed current files.
 
 The repository's portable runner preserves the R1B training and evaluation
 logic while replacing machine-specific D-drive paths with repository-relative
