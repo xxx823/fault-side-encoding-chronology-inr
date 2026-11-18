@@ -15,3 +15,5 @@ checkpoints/
 *.pdf
 !data/case1/fault_meshes/
 !data/case1/fault_meshes/*.vtp
+
+!images/workflow.png
